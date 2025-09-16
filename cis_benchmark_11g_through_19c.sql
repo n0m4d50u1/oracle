@@ -74,15 +74,16 @@ FROM v$instance;
 
 -- Get hostname and SID for filename (turn off display for these queries)
 SET TERMOUT OFF
-COLUMN hostname NEW_VALUE hostname
-COLUMN instance_name NEW_VALUE instance_name
+COLUMN hostname NEW_VALUE hostname NOPRINT
+COLUMN instance_name NEW_VALUE instance_name NOPRINT
 SELECT SYS_CONTEXT('USERENV', 'SERVER_HOST') AS hostname FROM DUAL;
 SELECT SYS_CONTEXT('USERENV', 'INSTANCE_NAME') AS instance_name FROM DUAL;
 SET TERMOUT ON
-
+SET DEFINE ON
 -- Set output file with dynamic name CIS_HOST_SID.html
-SPOOL CIS_&hostname._&instance_name.html
-
+SPOOL CIS_&hostname._&instance_name..html
+SET DEFINE OFF
+  
 -- Now turn off terminal output for the report generation
 SET TERMOUT OFF
 
