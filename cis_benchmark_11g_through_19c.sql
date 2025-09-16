@@ -3770,7 +3770,9 @@ PROMPT
 PROMPT ============================================================
 PROMPT          CIS Oracle Database Audit Report Generated
 PROMPT ============================================================
+SET DEFINE ON
 PROMPT Output file: CIS_&hostname._&instance_name..html
+SET DEFINE OFF
 PROMPT
 PROMPT Report includes comprehensive checks for:
 PROMPT - Database installation and patching
