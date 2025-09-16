@@ -19,15 +19,15 @@ SET TERMOUT ON
 SET ECHO OFF
 
 -- Version Detection Variables (must be defined before query)
-COLUMN db_version NEW_VALUE db_version
-COLUMN version_num NEW_VALUE version_num
-COLUMN version_display NEW_VALUE version_display
-COLUMN is_11g NEW_VALUE is_11g
-COLUMN is_12c NEW_VALUE is_12c
-COLUMN is_18c NEW_VALUE is_18c
-COLUMN is_19c NEW_VALUE is_19c
-COLUMN is_multitenant NEW_VALUE is_multitenant
-COLUMN cis_version NEW_VALUE cis_version
+COLUMN db_version NEW_VALUE db_version NOPRINT
+COLUMN version_num NEW_VALUE version_num NOPRINT
+COLUMN version_display NEW_VALUE version_display NOPRINT
+COLUMN is_11g NEW_VALUE is_11g NOPRINT
+COLUMN is_12c NEW_VALUE is_12c NOPRINT
+COLUMN is_18c NEW_VALUE is_18c NOPRINT
+COLUMN is_19c NEW_VALUE is_19c NOPRINT
+COLUMN is_multitenant NEW_VALUE is_multitenant NOPRINT
+COLUMN cis_version NEW_VALUE cis_version NOPRINT
 
 -- Detect Oracle Version (must run with TERMOUT ON to set variables)
 SELECT 
