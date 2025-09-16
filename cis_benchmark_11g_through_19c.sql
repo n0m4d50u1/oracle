@@ -17,6 +17,195 @@ SET VERIFY OFF
 SET TRIMSPOOL ON
 SET TERMOUT ON
 SET ECHO OFF
+SET SERVEROUTPUT ON
+
+-- ============================================================================
+-- PRIVILEGE VERIFICATION SECTION
+-- Verify the current user has necessary privileges before starting the audit
+-- ============================================================================
+
+PROMPT
+PROMPT ============================================================================
+PROMPT                      CIS Oracle Database Audit Tool
+PROMPT                        Privilege Verification
+PROMPT ============================================================================
+PROMPT
+
+-- Check current user and basic connection
+SELECT 'Current User: ' || USER || ' | Database: ' || SYS_CONTEXT('USERENV', 'DB_NAME') || 
+       ' | Connected At: ' || TO_CHAR(SYSDATE, 'DD-MON-YYYY HH24:MI:SS') AS "CONNECTION INFO" FROM DUAL;
+
+PROMPT
+PROMPT Checking required privileges...
+PROMPT
+
+-- Privilege verification using PL/SQL block
+DECLARE
+    v_error_count NUMBER := 0;
+    v_warning_count NUMBER := 0;
+    v_test_count NUMBER;
+    v_version VARCHAR2(100);
+    v_cdb VARCHAR2(10) := 'NO';
+    v_user VARCHAR2(128);
+    TYPE privilege_test_rec IS RECORD (
+        test_name VARCHAR2(50),
+        sql_text VARCHAR2(4000),
+        is_critical BOOLEAN,
+        version_specific VARCHAR2(10) -- NULL, '12c+', '11g', etc.
+    );
+    TYPE privilege_test_tab IS TABLE OF privilege_test_rec;
+    
+    privilege_tests privilege_test_tab := privilege_test_tab(
+        -- Critical system views
+        privilege_test_rec('V$PARAMETER', 'SELECT COUNT(*) FROM V$PARAMETER WHERE ROWNUM <= 1', TRUE, NULL),
+        privilege_test_rec('V$INSTANCE', 'SELECT COUNT(*) FROM V$INSTANCE WHERE ROWNUM <= 1', TRUE, NULL),
+        privilege_test_rec('V$DATABASE', 'SELECT COUNT(*) FROM V$DATABASE WHERE ROWNUM <= 1', TRUE, NULL),
+        
+        -- Critical DBA views
+        privilege_test_rec('DBA_USERS', 'SELECT COUNT(*) FROM DBA_USERS WHERE ROWNUM <= 1', TRUE, NULL),
+        privilege_test_rec('DBA_TAB_PRIVS', 'SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE ROWNUM <= 1', TRUE, NULL),
+        privilege_test_rec('DBA_SYS_PRIVS', 'SELECT COUNT(*) FROM DBA_SYS_PRIVS WHERE ROWNUM <= 1', TRUE, NULL),
+        privilege_test_rec('DBA_ROLE_PRIVS', 'SELECT COUNT(*) FROM DBA_ROLE_PRIVS WHERE ROWNUM <= 1', TRUE, NULL),
+        privilege_test_rec('DBA_PROFILES', 'SELECT COUNT(*) FROM DBA_PROFILES WHERE ROWNUM <= 1', TRUE, NULL),
+        
+        -- Audit-related views
+        privilege_test_rec('DBA_STMT_AUDIT_OPTS', 'SELECT COUNT(*) FROM DBA_STMT_AUDIT_OPTS WHERE ROWNUM <= 1', TRUE, NULL),
+        privilege_test_rec('DBA_PRIV_AUDIT_OPTS', 'SELECT COUNT(*) FROM DBA_PRIV_AUDIT_OPTS WHERE ROWNUM <= 1', TRUE, NULL),
+        privilege_test_rec('DBA_OBJ_AUDIT_OPTS', 'SELECT COUNT(*) FROM DBA_OBJ_AUDIT_OPTS WHERE ROWNUM <= 1', TRUE, NULL),
+        
+        -- Security-specific views
+        privilege_test_rec('DBA_USERS_WITH_DEFPWD', 'SELECT COUNT(*) FROM DBA_USERS_WITH_DEFPWD WHERE ROWNUM <= 1', TRUE, NULL),
+        privilege_test_rec('DBA_DB_LINKS', 'SELECT COUNT(*) FROM DBA_DB_LINKS WHERE ROWNUM <= 1', FALSE, NULL),
+        privilege_test_rec('DBA_PROXIES', 'SELECT COUNT(*) FROM DBA_PROXIES WHERE ROWNUM <= 1', FALSE, NULL),
+        privilege_test_rec('DBA_ROLES', 'SELECT COUNT(*) FROM DBA_ROLES WHERE ROWNUM <= 1', FALSE, NULL),
+        
+        -- Version-specific views
+        privilege_test_rec('V$PDBS', 'SELECT COUNT(*) FROM V$PDBS WHERE ROWNUM <= 1', FALSE, '12c+'),
+        privilege_test_rec('AUDIT_UNIFIED_ENABLED_POLICIES', 'SELECT COUNT(*) FROM AUDIT_UNIFIED_ENABLED_POLICIES WHERE ROWNUM <= 1', FALSE, '12c+'),
+        privilege_test_rec('DBA_AUDIT_POLICIES', 'SELECT COUNT(*) FROM DBA_AUDIT_POLICIES WHERE ROWNUM <= 1', FALSE, '12c+')
+    );
+    
+BEGIN
+    -- Get version and user info
+    SELECT version INTO v_version FROM v$instance;
+    SELECT USER INTO v_user FROM DUAL;
+    
+    -- Check if CDB
+    BEGIN
+        IF v_version LIKE '12.%' OR v_version LIKE '18.%' OR v_version LIKE '19.%' THEN
+            SELECT CDB INTO v_cdb FROM V$DATABASE WHERE ROWNUM = 1;
+        END IF;
+    EXCEPTION
+        WHEN OTHERS THEN
+            v_cdb := 'UNKNOWN';
+    END;
+    
+    DBMS_OUTPUT.PUT_LINE('Database Version: ' || v_version);
+    DBMS_OUTPUT.PUT_LINE('Multitenant (CDB): ' || v_cdb);
+    DBMS_OUTPUT.PUT_LINE('Running as User: ' || v_user);
+    DBMS_OUTPUT.PUT_LINE('');
+    DBMS_OUTPUT.PUT_LINE('Testing required privileges:');
+    DBMS_OUTPUT.PUT_LINE('-----------------------------');
+    
+    -- Test each privilege
+    FOR i IN 1..privilege_tests.COUNT LOOP
+        -- Skip version-specific tests if not applicable
+        IF privilege_tests(i).version_specific IS NOT NULL THEN
+            IF privilege_tests(i).version_specific = '12c+' AND 
+               NOT (v_version LIKE '12.%' OR v_version LIKE '18.%' OR v_version LIKE '19.%') THEN
+                CONTINUE;
+            END IF;
+        END IF;
+        
+        BEGIN
+            EXECUTE IMMEDIATE privilege_tests(i).sql_text INTO v_test_count;
+            DBMS_OUTPUT.PUT_LINE('[PASS] ' || RPAD(privilege_tests(i).test_name, 30) || ' - Access granted');
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF privilege_tests(i).is_critical THEN
+                    DBMS_OUTPUT.PUT_LINE('[FAIL] ' || RPAD(privilege_tests(i).test_name, 30) || ' - ' || SQLERRM);
+                    v_error_count := v_error_count + 1;
+                ELSE
+                    DBMS_OUTPUT.PUT_LINE('[WARN] ' || RPAD(privilege_tests(i).test_name, 30) || ' - ' || SQLERRM);
+                    v_warning_count := v_warning_count + 1;
+                END IF;
+        END;
+    END LOOP;
+    
+    DBMS_OUTPUT.PUT_LINE('');
+    DBMS_OUTPUT.PUT_LINE('Privilege Check Summary:');
+    DBMS_OUTPUT.PUT_LINE('------------------------');
+    DBMS_OUTPUT.PUT_LINE('Critical Failures: ' || v_error_count);
+    DBMS_OUTPUT.PUT_LINE('Warnings: ' || v_warning_count);
+    
+    -- Provide recommendations based on results
+    IF v_error_count > 0 THEN
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('CRITICAL: Cannot proceed with audit due to missing privileges!');
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('REQUIRED ACTIONS:');
+        DBMS_OUTPUT.PUT_LINE('================');
+        
+        IF v_cdb = 'YES' THEN
+            DBMS_OUTPUT.PUT_LINE('For MULTITENANT database, connect as SYS/SYSTEM and run:');
+            DBMS_OUTPUT.PUT_LINE('CREATE ROLE C##CISSCANROLE CONTAINER=ALL;');
+            DBMS_OUTPUT.PUT_LINE('GRANT CREATE SESSION TO C##CISSCANROLE CONTAINER=ALL;');
+            DBMS_OUTPUT.PUT_LINE('GRANT SELECT ON V_$PARAMETER TO C##CISSCANROLE CONTAINER=ALL;');
+            DBMS_OUTPUT.PUT_LINE('GRANT SELECT ON CDB_USERS TO C##CISSCANROLE CONTAINER=ALL;');
+            DBMS_OUTPUT.PUT_LINE('GRANT SELECT ON CDB_TAB_PRIVS TO C##CISSCANROLE CONTAINER=ALL;');
+            DBMS_OUTPUT.PUT_LINE('-- (See README.md for complete multitenant setup)');
+            DBMS_OUTPUT.PUT_LINE('');
+            DBMS_OUTPUT.PUT_LINE('CREATE USER C##CISSCAN IDENTIFIED BY <password> CONTAINER=ALL;');
+            DBMS_OUTPUT.PUT_LINE('GRANT C##CISSCANROLE TO C##CISSCAN CONTAINER=ALL;');
+        ELSE
+            DBMS_OUTPUT.PUT_LINE('For NON-MULTITENANT database, connect as SYS/SYSTEM and run:');
+            DBMS_OUTPUT.PUT_LINE('CREATE ROLE CISSCANROLE;');
+            DBMS_OUTPUT.PUT_LINE('GRANT CREATE SESSION TO CISSCANROLE;');
+            DBMS_OUTPUT.PUT_LINE('GRANT SELECT ON V_$PARAMETER TO CISSCANROLE;');
+            DBMS_OUTPUT.PUT_LINE('GRANT SELECT ON DBA_USERS TO CISSCANROLE;');
+            DBMS_OUTPUT.PUT_LINE('GRANT SELECT ON DBA_TAB_PRIVS TO CISSCANROLE;');
+            DBMS_OUTPUT.PUT_LINE('-- (See README.md for complete non-multitenant setup)');
+            DBMS_OUTPUT.PUT_LINE('');
+            DBMS_OUTPUT.PUT_LINE('CREATE USER CISSCAN IDENTIFIED BY <password>;');
+            DBMS_OUTPUT.PUT_LINE('GRANT CISSCANROLE TO CISSCAN;');
+        END IF;
+        
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('ALTERNATIVE: Grant DBA role (broader privileges):');
+        IF v_cdb = 'YES' THEN
+            DBMS_OUTPUT.PUT_LINE('GRANT C##DBA TO C##CISSCAN CONTAINER=ALL;');
+        ELSE
+            DBMS_OUTPUT.PUT_LINE('GRANT DBA TO CISSCAN;');
+        END IF;
+        
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('AUDIT STOPPED - Please fix privileges and re-run');
+        DBMS_OUTPUT.PUT_LINE('============================================================================');
+        
+        -- Exit the script
+        RAISE_APPLICATION_ERROR(-20001, 'Insufficient privileges for CIS audit');
+        
+    ELSIF v_warning_count > 0 THEN
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('WARNINGS: Some optional features may not be available.');
+        DBMS_OUTPUT.PUT_LINE('The audit will continue but some checks may be skipped.');
+        DBMS_OUTPUT.PUT_LINE('For complete coverage, see README.md for full privilege setup.');
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('Continuing with audit...');
+        
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('SUCCESS: All required privileges verified!');
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('Starting CIS Oracle Database Security Audit...');
+    END IF;
+    
+    DBMS_OUTPUT.PUT_LINE('============================================================================');
+END;
+/
+
+-- Continue only if no critical errors (the RAISE_APPLICATION_ERROR above will stop execution if needed)
+PROMPT
 
 -- Version Detection Variables (must be defined before query)
 COLUMN db_version NEW_VALUE db_version NOPRINT
