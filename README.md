@@ -54,12 +54,8 @@ The tool performs comprehensive security checks across these CIS benchmark secti
 
 - Oracle Database (11g R2, 12c, 18c, 19c, or 23ai)
 - Oracle SQL*Plus client
-- Database user with appropriate privileges:
-  ```sql
-  -- Minimum required privileges
-  GRANT CONNECT TO <audit_user>;
-  GRANT SELECT ANY DICTIONARY TO <audit_user>;
-  ```
+- Database administrator privileges to create the audit user and role
+- Database user with appropriate privileges (see setup instructions below)
 
 ## 📦 Installation
 
@@ -69,18 +65,135 @@ The tool performs comprehensive security checks across these CIS benchmark secti
    cd oracle
    ```
 
-2. **Verify SQL*Plus connectivity:**
+2. **Set up database permissions** (see Database Setup section below)
+
+3. **Verify SQL*Plus connectivity:**
    ```bash
    sqlplus username/password@database
    ```
+
+## 🔐 Database Setup
+
+The CIS audit script requires specific database permissions to access all security-related views and tables. Choose the appropriate setup based on your Oracle Database architecture:
+
+### Non-Multitenant Database (11g, 12c Non-CDB)
+
+Connect as a privileged user (SYS, SYSTEM, or DBA role) and execute:
+
+```sql
+-- Create the audit role
+CREATE ROLE CISSCANROLE;
+
+-- Grant necessary system privileges
+GRANT CREATE SESSION TO CISSCANROLE;
+
+-- Grant specific view privileges
+GRANT SELECT ON V_$PARAMETER TO CISSCANROLE;
+GRANT SELECT ON DBA_TAB_PRIVS TO CISSCANROLE;
+GRANT SELECT ON DBA_TABLES TO CISSCANROLE;
+GRANT SELECT ON DBA_PROFILES TO CISSCANROLE;
+GRANT SELECT ON DBA_SYS_PRIVS TO CISSCANROLE;
+GRANT SELECT ON DBA_STMT_AUDIT_OPTS TO CISSCANROLE;
+GRANT SELECT ON DBA_ROLE_PRIVS TO CISSCANROLE;
+GRANT SELECT ON DBA_OBJ_AUDIT_OPTS TO CISSCANROLE;
+GRANT SELECT ON DBA_PRIV_AUDIT_OPTS TO CISSCANROLE;
+GRANT SELECT ON DBA_PROXIES TO CISSCANROLE;
+GRANT SELECT ON DBA_USERS TO CISSCANROLE;
+GRANT SELECT ON DBA_USERS_WITH_DEFPWD TO CISSCANROLE;
+GRANT SELECT ON DBA_DB_LINKS TO CISSCANROLE;
+GRANT SELECT ON DBA_ROLES TO CISSCANROLE;
+GRANT SELECT ON V_$INSTANCE TO CISSCANROLE;
+GRANT SELECT ON V_$DATABASE TO CISSCANROLE;
+GRANT SELECT ON V_$PDBS TO CISSCANROLE;
+GRANT SELECT ON V_$SYSTEM_PARAMETER TO CISSCANROLE;
+GRANT AUDIT_VIEWER TO CISSCANROLE; -- For 12c+ audit features
+
+-- Create the audit user
+CREATE USER CISSCAN IDENTIFIED BY <strong_password>;
+GRANT CISSCANROLE TO CISSCAN;
+```
+Ignore ERRORS if running the grants against a 11g database.
+
+### Multitenant Database (12c+ CDB/PDB)
+
+Connect to the **CDB root container** as a privileged user (SYS, SYSTEM, or C##DBA role) and execute:
+
+```sql
+-- Create the common audit role (available in all containers)
+CREATE ROLE C##CISSCANROLE CONTAINER=ALL;
+
+-- Grant necessary system privileges
+GRANT CREATE SESSION TO C##CISSCANROLE CONTAINER=ALL;
+
+-- Grant specific view privileges for CDB-wide access
+GRANT SELECT ON V_$PARAMETER TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_TAB_PRIVS TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_TABLES TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_PROFILES TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_SYS_PRIVS TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_STMT_AUDIT_OPTS TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_ROLE_PRIVS TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_OBJ_AUDIT_OPTS TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_PRIV_AUDIT_OPTS TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_PROXIES TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_USERS TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_ROLES TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_USERS_WITH_DEFPWD TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON CDB_DB_LINKS TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON V_$INSTANCE TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON V_$DATABASE TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON V_$PDBS TO C##CISSCANROLE CONTAINER=ALL;
+GRANT SELECT ON V_$SYSTEM_PARAMETER TO C##CISSCANROLE CONTAINER=ALL;
+GRANT AUDIT_VIEWER TO C##CISSCANROLE CONTAINER=ALL;
+
+-- Create the common audit user
+CREATE USER C##CISSCAN IDENTIFIED BY <strong_password> CONTAINER=ALL;
+GRANT C##CISSCANROLE TO C##CISSCAN CONTAINER=ALL;
+
+-- Enable access to data from all containers
+ALTER USER C##CISSCAN SET CONTAINER_DATA=ALL CONTAINER=CURRENT;
+```
+
+### Alternative Setup (Using DBA Role)
+
+For simpler setup (with broader privileges), you can use the DBA role:
+
+```sql
+-- Non-multitenant
+CREATE USER CISSCAN IDENTIFIED BY <strong_password>;
+GRANT DBA TO CISSCAN;
+
+-- Multitenant
+CREATE USER C##CISSCAN IDENTIFIED BY <strong_password> CONTAINER=ALL;
+GRANT C##DBA TO C##CISSCAN CONTAINER=ALL;
+ALTER USER C##CISSCAN SET CONTAINER_DATA=ALL CONTAINER=CURRENT;
+```
+
+### Verification
+
+After setup, verify the permissions:
+
+```sql
+-- Connect as the audit user
+sqlplus cisscan/password@database
+-- Or for multitenant: sqlplus c##cisscan/password@database
+
+-- Test critical view access
+SELECT COUNT(*) FROM DBA_USERS_WITH_DEFPWD;
+SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE ROWNUM <= 5;
+SELECT COUNT(*) FROM V$PARAMETER WHERE ROWNUM <= 5;
+```
 
 ## 🚀 Usage
 
 ### Basic Usage
 
 ```bash
-# Connect and run the audit
-sqlplus username/password@database @cis_benchmark_11g_through_19c.sql
+# Non-multitenant database
+sqlplus cisscan/password@database @cis_benchmark_11g_through_19c.sql
+
+# Multitenant database (from CDB root or specific PDB)
+sqlplus c##cisscan/password@database @cis_benchmark_11g_through_19c.sql
 ```
 
 ### Example Output
@@ -157,9 +270,16 @@ oracle/
 ## 🔒 Security Considerations
 
 ### Database Privileges
-- Use dedicated audit user with minimal required privileges
-- Avoid using SYS or SYSTEM accounts for auditing
-- Consider creating a read-only audit role
+- **Use the dedicated CISSCAN user** created with the setup instructions
+- **Never use SYS or SYSTEM** accounts for routine auditing
+- **Rotate audit user passwords regularly** (recommend 90 days)
+- **Lock the audit user** when not actively performing audits:
+  ```sql
+  ALTER USER CISSCAN ACCOUNT LOCK;   -- Lock when not in use
+  ALTER USER CISSCAN ACCOUNT UNLOCK; -- Unlock for auditing
+  ```
+- **Monitor audit user activity** through database audit logs
+- **Remove unnecessary privileges** if using alternative setup methods
 
 ### Network Security
 - Run audits from secure, authorized systems
@@ -178,15 +298,26 @@ oracle/
 
 **"Insufficient Privileges" Error:**
 ```sql
--- Grant required privileges
-GRANT SELECT ANY DICTIONARY TO audit_user;
+-- Ensure you followed the Database Setup section properly
+-- For missing specific views, grant explicitly:
+GRANT SELECT ON DBA_USERS_WITH_DEFPWD TO cisscanrole;
+GRANT SELECT ON V_$PARAMETER TO cisscanrole;
+GRANT AUDIT_VIEWER TO cisscanrole; -- For 12c+ audit features
 ```
 
-**"Table or View Does Not Exist":**
+**"Table or View Does Not Exist" (DBA_USERS_WITH_DEFPWD):**
 ```sql
--- Verify user can access system views
-SELECT * FROM V$VERSION;
-SELECT * FROM DBA_USERS WHERE ROWNUM = 1;
+-- This view requires specific privileges beyond SELECT ANY DICTIONARY
+-- Connect as SYS or SYSTEM and grant:
+GRANT SELECT ON SYS.DBA_USERS_WITH_DEFPWD TO cisscanrole;
+-- Or use the complete setup from Database Setup section
+```
+
+**"Table or View Does Not Exist" (AUDIT_UNIFIED_ENABLED_POLICIES):**
+```sql
+-- For 12c+ unified auditing features
+GRANT AUDIT_VIEWER TO cisscanrole;
+-- Or connect as privileged user for full audit access
 ```
 
 **Script Hangs or Errors:**
