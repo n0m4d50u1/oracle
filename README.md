@@ -10,6 +10,7 @@ A comprehensive Oracle Database security audit tool based on the Center for Inte
 - **Comprehensive Coverage**: Audits 100+ security controls across 5 major categories
 - **Dynamic Remediation**: Provides specific SQL commands for fixing identified issues
 - **Zero Configuration**: Works out-of-the-box with any Oracle Database connection
+- **Built-in Privilege Verification**: Automatically checks permissions before starting the audit
 
 ## 📋 Supported Oracle Versions & CIS Benchmarks
 
@@ -197,6 +198,16 @@ sqlplus cisscan/password@database @cis_benchmark_11g_through_19c.sql
 # Multitenant database (from CDB root or specific PDB)
 sqlplus c##cisscan/password@database @cis_benchmark_11g_through_19c.sql
 ```
+
+### Privilege Verification
+
+The script automatically verifies all required privileges before starting the audit:
+
+- **✅ Success**: All required privileges available - audit proceeds normally
+- **⚠️ Warnings**: Some optional features unavailable - audit continues with limited functionality  
+- **❌ Critical Failure**: Missing essential privileges - audit stops with detailed setup instructions
+
+If privilege issues are detected, the script provides specific commands to fix them based on your database architecture (multitenant vs non-multitenant).
 
 ### Example Output
 
