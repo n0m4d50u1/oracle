@@ -139,7 +139,7 @@ SELECT '<h1><span class="material-icons">security</span>CIS ' ||
     ELSE 'Oracle Database'
   END || ' Benchmark Audit Report</h1>' FROM v$instance;
 PROMPT <div class="toc"><h3>Database Information</h3>
-SELECT '<p><strong>Host:</strong> ' || SYS_CONTEXT('USERENV', 'HOST') || '</p>' FROM DUAL;
+SELECT '<p><strong>Host:</strong> ' || SYS_CONTEXT('USERENV', 'SERVER_HOST') || '</p>' FROM DUAL;
 SELECT '<p><strong>Database:</strong> ' || SYS_CONTEXT('USERENV', 'DB_NAME') || '</p>' FROM DUAL;
 SELECT '<p><strong>Instance:</strong> ' || SYS_CONTEXT('USERENV', 'INSTANCE_NAME') || '</p>' FROM DUAL;
 SELECT '<p><strong>Version:</strong> ' || version || ' (' ||
