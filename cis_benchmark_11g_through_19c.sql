@@ -218,7 +218,12 @@ COLUMN is_19c NEW_VALUE is_19c NOPRINT
 COLUMN is_multitenant NEW_VALUE is_multitenant NOPRINT
 COLUMN cis_version NEW_VALUE cis_version NOPRINT
 
--- Detect Oracle Version (must run with TERMOUT ON to set variables)
+-- Detect Oracle Version and Container Context (must run with TERMOUT ON to set variables)
+COLUMN current_container NEW_VALUE current_container NOPRINT
+COLUMN container_name NEW_VALUE container_name NOPRINT
+COLUMN is_cdb_root NEW_VALUE is_cdb_root NOPRINT
+COLUMN is_pdb NEW_VALUE is_pdb NOPRINT
+
 SELECT 
   CASE 
     WHEN version LIKE '19.%' THEN '19c'
@@ -253,12 +258,45 @@ SELECT
     ELSE 'NO'
   END AS is_multitenant,
   CASE 
-    WHEN version LIKE '19.%' THEN 'CIS Oracle Database 19c Benchmark v1.0.0'
-    WHEN version LIKE '18.%' THEN 'CIS Oracle Database 18c Benchmark v1.0.0'
-    WHEN version LIKE '12.%' THEN 'CIS Oracle Database 12c Benchmark v2.0.0'
+    WHEN version LIKE '19.%' THEN 'CIS Oracle Database 19c Benchmark v1.2.0'
+    WHEN version LIKE '18.%' THEN 'CIS Oracle Database 18c Benchmark v1.1.0'
+    WHEN version LIKE '12.%' THEN 'CIS Oracle Database 12c Benchmark v3.0.0'
     WHEN version LIKE '11.2%' THEN 'CIS Oracle Database 11g R2 Benchmark v2.2.0'
     ELSE 'CIS Oracle Database Benchmark'
-  END AS cis_version
+  END AS cis_version,
+  -- Container context detection
+  CASE 
+    WHEN version LIKE '12.%' OR version LIKE '18.%' OR version LIKE '19.%' THEN
+      CASE WHEN (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' THEN
+        SYS_CONTEXT('USERENV', 'CON_NAME')
+      ELSE 'NON_CDB'
+      END
+    ELSE 'SINGLE_TENANT'
+  END AS current_container,
+  CASE 
+    WHEN version LIKE '12.%' OR version LIKE '18.%' OR version LIKE '19.%' THEN
+      CASE WHEN (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' THEN
+        SYS_CONTEXT('USERENV', 'CON_NAME')
+      ELSE 'Non-CDB'
+      END
+    ELSE 'Single-tenant'
+  END AS container_name,
+  CASE 
+    WHEN version LIKE '12.%' OR version LIKE '18.%' OR version LIKE '19.%' THEN
+      CASE WHEN (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' THEN
+        CASE WHEN SYS_CONTEXT('USERENV', 'CON_NAME') = 'CDB$ROOT' THEN 'YES' ELSE 'NO' END
+      ELSE 'NO'
+      END
+    ELSE 'NO'
+  END AS is_cdb_root,
+  CASE 
+    WHEN version LIKE '12.%' OR version LIKE '18.%' OR version LIKE '19.%' THEN
+      CASE WHEN (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' THEN
+        CASE WHEN SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT' THEN 'YES' ELSE 'NO' END
+      ELSE 'NO'
+      END
+    ELSE 'NO'
+  END AS is_pdb
 FROM v$instance;
 
 -- Get hostname and SID for filename (turn off display for these queries)
@@ -351,15 +389,25 @@ SELECT '<p><strong>CIS Benchmark:</strong> ' ||
 SELECT '<p><strong>Generated:</strong> ' || TO_CHAR(SYSDATE, 'DD-MON-YYYY HH24:MI:SS') || '</p>' FROM DUAL;
 SELECT '<p><strong>User:</strong> ' || USER || '</p>' FROM DUAL;
 
--- Add multitenant info for 12c+
+-- Add multitenant info for 12c+ with CIS benchmark context
 SELECT CASE 
   WHEN version LIKE '12.%' OR version LIKE '18.%' OR version LIKE '19.%' THEN
     '<p><strong>Container Database (CDB):</strong> ' || 
     NVL((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1), 'NO') || '</p>' ||
     CASE WHEN (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' THEN
-      '<p><strong>Current Container:</strong> ' || SYS_CONTEXT('USERENV', 'CON_NAME') || '</p>'
-    ELSE '' END
-  ELSE '' 
+      '<p><strong>Current Container:</strong> ' || SYS_CONTEXT('USERENV', 'CON_NAME') || '</p>' ||
+      '<p><strong>CIS Assessment Level:</strong> ' ||
+      CASE WHEN SYS_CONTEXT('USERENV', 'CON_NAME') = 'CDB$ROOT' 
+        THEN 'CDB Root Container (System-level controls)'
+        ELSE 'PDB Container (Database-level controls)'
+      END || '</p>' ||
+      '<p><strong>Assessment Scope:</strong> ' ||
+      CASE WHEN SYS_CONTEXT('USERENV', 'CON_NAME') = 'CDB$ROOT' 
+        THEN 'This report covers CDB-level controls. Run separately in each PDB for complete assessment.'
+        ELSE 'This report covers PDB-level controls. Run from CDB$ROOT for CDB-level controls.'
+      END || '</p>'
+    ELSE '<p><strong>Assessment Scope:</strong> Non-CDB database (all controls apply directly)</p>' END
+  ELSE '<p><strong>Assessment Scope:</strong> Single-tenant database (all controls apply directly)</p>' 
 END FROM v$instance;
 
 PROMPT </div>
@@ -383,6 +431,7 @@ PROMPT <table>
 PROMPT <tr><th width="5%">Control</th><th width="35%">Title</th><th width="8%">Status</th><th width="20%">Current Value</th><th width="15%">Expected</th><th width="17%">Remediation</th></tr>
 
 -- 1.1 Ensure the Appropriate Version/Patches for Oracle Software Is Installed
+-- Version Check
 SELECT '<tr class="' ||
   CASE 
     WHEN version LIKE '19.%' THEN 'pass'
@@ -391,8 +440,8 @@ SELECT '<tr class="' ||
     WHEN version LIKE '11.2.0.4%' THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>1.1</td>' ||
-  '<td>Ensure the Appropriate Version/Patches for Oracle Software Is Installed (Scored)</td>' ||
+  '<td>1.1a</td>' ||
+  '<td>Ensure Appropriate Oracle Version Is Installed (Scored)</td>' ||
   '<td>' || 
     CASE 
       WHEN version LIKE '19.%' OR version LIKE '18.%' OR version LIKE '12.%' OR version LIKE '11.2.0.4%' THEN 'PASS'
@@ -401,55 +450,228 @@ SELECT '<tr class="' ||
   '<td>' || version || '</td>' ||
   '<td>' || 
     CASE 
-      WHEN version LIKE '19.%' THEN '19.x with latest RU'
-      WHEN version LIKE '18.%' THEN '18.x with latest RU'
-      WHEN version LIKE '12.%' THEN '12.x with latest PSU'
-      WHEN version LIKE '11.2%' THEN '11.2.0.4 with latest PSU'
-      ELSE 'Check CIS Benchmark'
+      WHEN version LIKE '19.%' THEN '19.x (supported)'
+      WHEN version LIKE '18.%' THEN '18.x (supported)'
+      WHEN version LIKE '12.%' THEN '12.x (supported)'
+      WHEN version LIKE '11.2%' THEN '11.2.0.4+ (minimum)'
+      ELSE 'Supported version required'
     END || '</td>' ||
-  '<td class="remediation">Apply latest RU/PSU patches</td>' ||
+  '<td class="remediation">Upgrade to supported Oracle version</td>' ||
   '</tr>'
 FROM v$instance;
 
--- 1.2 Ensure All Default Passwords Are Changed
+-- Recent Patches Check for 11g (using DBA_REGISTRY_HISTORY)
+SELECT CASE WHEN vi.version LIKE '11.%' THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(drh.ID) > 0 THEN 'pass'
+    ELSE 'warning'
+  END || '">' ||
+  '<td>1.1b</td>' ||
+  '<td>Ensure Recent Patches Are Applied - 11g (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(drh.ID) > 0 THEN 'PASS' ELSE 'WARNING' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(drh.ID) > 0 THEN 
+      'Recent patches found: ' || COUNT(drh.ID) || ' patches in last 90 days'
+    ELSE 'No recent patches found in last 90 days'
+    END || '</td>' ||
+  '<td>Recent PSU/CPU patches within 90 days</td>' ||
+  '<td class="remediation">Apply latest PSU/CPU patches. Query: SELECT ACTION,VERSION,ID FROM DBA_REGISTRY_HISTORY WHERE TO_DATE(TRIM(TO_CHAR(ID)),''YYMMDD'') > SYSDATE-90 AND ID > 160000</td>' ||
+  '</tr>'
+ELSE '' END
+FROM v$instance vi 
+LEFT JOIN DBA_REGISTRY_HISTORY drh ON (
+  vi.version LIKE '11.%' 
+  AND TO_DATE(TRIM(TO_CHAR(drh.ID)), 'YYMMDD') > SYSDATE-90 
+  AND drh.ID > 160000
+)
+GROUP BY vi.version;
+
+-- Patch Check for 12c+ (Manual - requires opatch)
+SELECT CASE WHEN version LIKE '12.%' OR version LIKE '18.%' OR version LIKE '19.%' THEN
+  '<tr class="manual">' ||
+  '<td>1.1c</td>' ||
+  '<td>Ensure Recent Patches Are Applied - 12c+ (Scored)</td>' ||
+  '<td>MANUAL</td>' ||
+  '<td>Requires OS-level opatch command verification</td>' ||
+  '<td>' || 
+    CASE 
+      WHEN version LIKE '19.%' THEN 'Latest 19c RU (Release Update)'
+      WHEN version LIKE '18.%' THEN 'Latest 18c RU (Release Update)'
+      WHEN version LIKE '12.%' THEN 'Latest 12c RU/PSU'
+    END || '</td>' ||
+  '<td class="remediation">Run: opatch lsinventory | grep "&lt;latest_patch_version&gt;" OR $ORACLE_HOME/OPatch/opatch lsinventory</td>' ||
+  '</tr>'
+ELSE '' END FROM v$instance;
+
+-- 1.2 Ensure All Default Passwords Are Changed (11g and 12c+ non-multitenant/PDB)
+WITH default_pwd_11g AS (
+  SELECT 
+    vi.version,
+    dp.USERNAME
+  FROM v$instance vi
+  CROSS JOIN DBA_USERS_WITH_DEFPWD dp
+  WHERE vi.version LIKE '11.%'
+  AND dp.USERNAME NOT LIKE '%XS$NULL%'
+),
+default_pwd_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    a.USERNAME
+  FROM v$instance vi
+  CROSS JOIN DBA_USERS_WITH_DEFPWD a
+  CROSS JOIN DBA_USERS b
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND a.USERNAME = b.USERNAME
+  AND b.ACCOUNT_STATUS = 'OPEN'
+),
+default_pwd_combined AS (
+  SELECT version, USERNAME FROM default_pwd_11g
+  UNION ALL
+  SELECT version, USERNAME FROM default_pwd_12c_non_mt
+)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN (SELECT COUNT(*) FROM default_pwd_combined) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>1.2</td>' ||
   '<td>Ensure All Default Passwords Are Changed (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM default_pwd_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(USERNAME, ', ') WITHIN GROUP (ORDER BY USERNAME)
+    CASE WHEN (SELECT COUNT(*) FROM default_pwd_combined) > 0 THEN 
+      (SELECT LISTAGG(USERNAME, ', ') WITHIN GROUP (ORDER BY USERNAME) FROM default_pwd_combined)
     ELSE 'No users with default passwords'
     END || '</td>' ||
   '<td>No users should have default passwords</td>' ||
   '<td class="remediation">PASSWORD &lt;username&gt; or ALTER USER &lt;username&gt; IDENTIFIED BY &lt;new_password&gt;</td>' ||
   '</tr>'
-FROM DBA_USERS_WITH_DEFPWD
-WHERE USERNAME NOT LIKE '%XS$NULL%';
+FROM DUAL;
 
--- 1.3 Ensure All Sample Data And Users Have Been Removed
+-- 1.2b Ensure All Default Passwords Are Changed (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(U.USERNAME) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>1.2b</td>' ||
+  '<td>Ensure All Default Passwords Are Changed in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(U.USERNAME) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(U.USERNAME) > 0 THEN 
+      LISTAGG(DECODE(U.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE U.CON_ID = B.CON_ID)) || ':' || U.USERNAME, '; ') WITHIN GROUP (ORDER BY U.CON_ID, U.USERNAME)
+    ELSE 'No users with default passwords in any container'
+    END || '</td>' ||
+  '<td>No users should have default passwords in any container</td>' ||
+  '<td class="remediation">For each container: PASSWORD &lt;username&gt; or ALTER USER &lt;username&gt; IDENTIFIED BY &lt;new_password&gt;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT DISTINCT 
+    a.CON_ID,
+    a.USERNAME
+  FROM CDB_USERS_WITH_DEFPWD a
+  CROSS JOIN CDB_USERS c
+  WHERE a.USERNAME = c.USERNAME
+  AND c.ACCOUNT_STATUS = 'OPEN'
+  AND a.CON_ID = c.CON_ID
+) U
+GROUP BY ef.env_type;
+
+-- 1.3 Ensure All Sample Data And Users Have Been Removed (11g and 12c+ non-multitenant/PDB)
+WITH sample_users_11g AS (
+  SELECT 
+    vi.version,
+    du.USERNAME
+  FROM v$instance vi
+  CROSS JOIN DBA_USERS du
+  WHERE vi.version LIKE '11.%'
+  AND du.USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH')
+),
+sample_users_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    du.USERNAME
+  FROM v$instance vi
+  CROSS JOIN DBA_USERS du
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND du.USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH')
+),
+sample_users_combined AS (
+  SELECT version, USERNAME FROM sample_users_11g
+  UNION ALL
+  SELECT version, USERNAME FROM sample_users_12c_non_mt
+)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN (SELECT COUNT(*) FROM sample_users_combined) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>1.3</td>' ||
   '<td>Ensure All Sample Data And Users Have Been Removed (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM sample_users_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(USERNAME, ', ') WITHIN GROUP (ORDER BY USERNAME)
+    CASE WHEN (SELECT COUNT(*) FROM sample_users_combined) > 0 THEN 
+      (SELECT LISTAGG(USERNAME, ', ') WITHIN GROUP (ORDER BY USERNAME) FROM sample_users_combined)
     ELSE 'No sample users found'
     END || '</td>' ||
   '<td>No Oracle sample users should exist</td>' ||
   '<td class="remediation">Execute $ORACLE_HOME/demo/schema/drop_sch.sql to remove sample schemas</td>' ||
   '</tr>'
-FROM ALL_USERS
-WHERE USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH');
+FROM DUAL;
+
+-- 1.3b Ensure All Sample Data And Users Have Been Removed (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(U.USERNAME) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>1.3b</td>' ||
+  '<td>Ensure All Sample Data And Users Have Been Removed in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(U.USERNAME) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(U.USERNAME) > 0 THEN 
+      LISTAGG(DECODE(U.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE U.CON_ID = B.CON_ID)) || ':' || U.USERNAME, '; ') WITHIN GROUP (ORDER BY U.CON_ID, U.USERNAME)
+    ELSE 'No sample users found in any container'
+    END || '</td>' ||
+  '<td>No Oracle sample users should exist in any container</td>' ||
+  '<td class="remediation">For each container: Execute $ORACLE_HOME/demo/schema/drop_sch.sql or DROP USER &lt;sample_user&gt; CASCADE</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT DISTINCT 
+    a.CON_ID,
+    a.USERNAME
+  FROM CDB_USERS a
+  WHERE a.USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH')
+) U
+GROUP BY ef.env_type;
 
 -- 1.4 12c+: Check PDBADMIN accounts in multitenant
 WITH pdbadmin_check AS (
@@ -481,12 +703,43 @@ SELECT CASE
     END
   ELSE '' 
 END
-FROM v$instance vi, pdbadmin_check pc;
+FROM v$instance vi CROSS JOIN pdbadmin_check pc;
 
--- 1.5 18c+: Check for schema-only accounts
+-- 1.5 12c+: Check for proper common user naming in CDB
+SELECT CASE WHEN (vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version LIKE '19.%') THEN
+  CASE WHEN (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' THEN
+    '<tr class="' ||
+    CASE 
+      WHEN COUNT(du.USERNAME) = 0 THEN 'pass'
+      ELSE 'fail'
+    END || '">' ||
+    '<td>1.5</td>' ||
+    '<td>Ensure Common Users Follow Naming Convention (12c+ CDB) (Scored)</td>' ||
+    '<td>' || CASE WHEN COUNT(du.USERNAME) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+    '<td>' || 
+      CASE WHEN COUNT(du.USERNAME) > 0 THEN 
+        'Common users without C## prefix: ' || LISTAGG(du.USERNAME, ', ') WITHIN GROUP (ORDER BY du.USERNAME)
+      ELSE 'All common users follow naming convention'
+      END || '</td>' ||
+    '<td>Common users should start with C##</td>' ||
+    '<td class="remediation">Review and rename or drop non-compliant common users</td>' ||
+    '</tr>'
+  ELSE ''
+  END
+ELSE '' END
+FROM DBA_USERS du CROSS JOIN V$INSTANCE vi
+WHERE du.COMMON = 'YES' 
+AND du.USERNAME NOT LIKE 'C##%'
+AND du.USERNAME NOT IN ('SYS','SYSTEM','APPQOSSYS','AUDSYS','CTXSYS','DBSFWUSER','DBSNMP','DIP','DVF',
+'DVSYS','GGSYS','GSMADMIN_INTERNAL','GSMCATUSER','GSMROOTUSER','GSMUSER','LBACSYS','MDDATA','MDSYS','OJVMSYS','OLAPSYS',
+'ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','REMOTE_SCHEDULER_AGENT','SI_INFORMTN_SCHEMA','SYS$UMF','SYSBACKUP',
+'SYSDG','SYSKM','SYSRAC','WMSYS','XDB','XS$NULL')
+GROUP BY vi.version;
+
+-- 1.6 18c+: Check for schema-only accounts
 SELECT CASE WHEN version LIKE '18.%' OR version LIKE '19.%' THEN
   '<tr class="manual">' ||
-  '<td>1.5</td>' ||
+  '<td>1.6</td>' ||
   '<td>Consider Schema-Only Accounts (18c+) (Not Scored)</td>' ||
   '<td>MANUAL</td>' ||
   '<td>Review application schemas for NO AUTHENTICATION option</td>' ||
@@ -585,21 +838,74 @@ SELECT '<tr class="' ||
 FROM V$PARAMETER
 WHERE UPPER(NAME) = 'AUDIT_TRAIL';
 
--- 2.2.3 GLOBAL_NAMES
-SELECT '<tr class="' ||
-  CASE 
-    WHEN UPPER(VALUE) = 'TRUE' THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>2.2.3</td>' ||
-  '<td>Ensure GLOBAL_NAMES Is Set to TRUE (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'TRUE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || VALUE || '</td>' ||
-  '<td>TRUE</td>' ||
-  '<td class="remediation">ALTER SYSTEM SET GLOBAL_NAMES = TRUE SCOPE = SPFILE;</td>' ||
-  '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'GLOBAL_NAMES';
+-- 2.2.3 GLOBAL_NAMES (11g and 12c+ Non-Multitenant)
+SELECT CASE 
+  WHEN vi.version LIKE '11.%' OR 
+       (vi.version NOT LIKE '11.%' AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO') OR
+       (vi.version NOT LIKE '11.%' AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT') THEN
+    '<tr class="' ||
+    CASE 
+      WHEN UPPER(vp.VALUE) = 'TRUE' THEN 'pass'
+      ELSE 'fail'
+    END || '">' ||
+    '<td>2.2.3a</td>' ||
+    '<td>Ensure GLOBAL_NAMES Is Set to TRUE (Scored)</td>' ||
+    '<td>' || CASE WHEN UPPER(vp.VALUE) = 'TRUE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+    '<td>' || vp.VALUE || '</td>' ||
+    '<td>TRUE</td>' ||
+    '<td class="remediation">ALTER SYSTEM SET GLOBAL_NAMES = TRUE SCOPE = SPFILE;</td>' ||
+    '</tr>'
+  ELSE '' 
+END
+FROM V$PARAMETER vp CROSS JOIN v$instance vi
+WHERE UPPER(vp.NAME) = 'GLOBAL_NAMES';
+
+-- 2.2.3 GLOBAL_NAMES (12c+ Multi-tenant Container Database)
+WITH mt_global_names AS (
+  SELECT DISTINCT 
+    UPPER(V.VALUE) AS PARAM_VALUE,
+    DECODE(V.CON_ID,
+      0, (SELECT NAME FROM V$DATABASE),
+      1, (SELECT NAME FROM V$DATABASE),
+      (SELECT NAME FROM V$PDBS B WHERE V.CON_ID = B.CON_ID)
+    ) AS CONTAINER_NAME,
+    V.CON_ID
+  FROM V$SYSTEM_PARAMETER V
+  WHERE UPPER(V.NAME) = 'GLOBAL_NAMES'
+    AND EXISTS (SELECT 1 FROM v$instance WHERE version NOT LIKE '11.%')
+    AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+    AND SYS_CONTEXT('USERENV', 'CON_NAME') = 'CDB$ROOT'
+)
+SELECT CASE 
+  WHEN mt_context.is_mt_context = 1 THEN
+    '<tr class="' ||
+    CASE 
+      WHEN COUNT(CASE WHEN mgn.PARAM_VALUE != 'TRUE' THEN 1 END) = 0 THEN 'pass'
+      ELSE 'fail'
+    END || '">' ||
+    '<td>2.2.3b</td>' ||
+    '<td>Ensure GLOBAL_NAMES Is Set to TRUE - Multi-tenant (Scored)</td>' ||
+    '<td>' || CASE WHEN COUNT(CASE WHEN mgn.PARAM_VALUE != 'TRUE' THEN 1 END) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+    '<td>' || 
+      CASE WHEN COUNT(*) > 0 THEN 
+        LISTAGG(mgn.CONTAINER_NAME || ':' || mgn.PARAM_VALUE, ', ') WITHIN GROUP (ORDER BY mgn.CONTAINER_NAME)
+      ELSE 'No containers found'
+      END || '</td>' ||
+    '<td>TRUE for all containers</td>' ||
+    '<td class="remediation">ALTER SYSTEM SET GLOBAL_NAMES = TRUE SCOPE = SPFILE; (run in each container)</td>' ||
+    '</tr>'
+  ELSE ''
+END
+FROM mt_global_names mgn 
+CROSS JOIN (
+  SELECT CASE 
+    WHEN EXISTS (SELECT 1 FROM v$instance WHERE version NOT LIKE '11.%') 
+         AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+         AND SYS_CONTEXT('USERENV', 'CON_NAME') = 'CDB$ROOT' THEN 1 
+    ELSE 0 
+  END AS is_mt_context FROM DUAL
+) mt_context
+GROUP BY mt_context.is_mt_context;
 
 -- 2.2.4 LOCAL_LISTENER
 SELECT '<tr class="' ||
@@ -617,590 +923,2096 @@ SELECT '<tr class="' ||
 FROM V$PARAMETER
 WHERE UPPER(NAME) = 'LOCAL_LISTENER';
 
--- 2.2.5 O7_DICTIONARY_ACCESSIBILITY
-WITH o7_check AS (
+-- 2.2.5 O7_DICTIONARY_ACCESSIBILITY (11g)
+WITH o7_check_11g AS (
   SELECT 
-    CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS param_exists,
-    MAX(UPPER(VALUE)) AS param_value
-  FROM V$PARAMETER 
-  WHERE UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY'
+    vi.version,
+    CASE WHEN COUNT(vp.VALUE) > 0 THEN 1 ELSE 0 END AS param_exists,
+    MAX(UPPER(vp.VALUE)) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'O7_DICTIONARY_ACCESSIBILITY'
+  WHERE vi.version LIKE '11.%'
+  GROUP BY vi.version
+),
+o7_check_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    CASE WHEN COUNT(vsp.VALUE) > 0 THEN 1 ELSE 0 END AS param_exists,
+    MAX(UPPER(vsp.VALUE)) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'O7_DICTIONARY_ACCESSIBILITY'
+  WHERE vi.version NOT LIKE '11.%' AND 
+        ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+         ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  GROUP BY vi.version
+),
+o7_check_combined AS (
+  SELECT version, param_exists, param_value FROM o7_check_11g
+  UNION ALL
+  SELECT version, param_exists, param_value FROM o7_check_12c_non_mt
 )
-SELECT '<tr class="' ||
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN param_exists = 0 THEN 'warning'
-    WHEN param_value = 'FALSE' OR param_value IS NULL THEN 'pass'
+    WHEN MAX(occ.param_exists) = 0 THEN 'warning'
+    WHEN MAX(occ.param_value) = 'FALSE' OR MAX(occ.param_value) IS NULL THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>2.2.5</td>' ||
+  '<td>2.2.5a</td>' ||
   '<td>Ensure O7_DICTIONARY_ACCESSIBILITY Is Set to FALSE (Scored)</td>' ||
   '<td>' || 
     CASE 
-      WHEN param_exists = 0 THEN 'N/A'
-      WHEN param_value = 'FALSE' OR param_value IS NULL THEN 'PASS' 
+      WHEN MAX(occ.param_exists) = 0 THEN 'N/A'
+      WHEN MAX(occ.param_value) = 'FALSE' OR MAX(occ.param_value) IS NULL THEN 'PASS' 
       ELSE 'FAIL' 
     END || '</td>' ||
   '<td>' || 
     CASE 
-      WHEN param_exists = 0 THEN 'Parameter not found in this Oracle version'
-      WHEN param_value IS NULL THEN 'FALSE (default)'
-      ELSE param_value
+      WHEN MAX(occ.param_exists) = 0 THEN 'Parameter not found in this Oracle version'
+      WHEN MAX(occ.param_value) IS NULL THEN 'FALSE (default)'
+      ELSE MAX(occ.param_value)
     END || '</td>' ||
   '<td>FALSE</td>' ||
   '<td class="remediation">' ||
     CASE 
-      WHEN param_exists = 0 THEN 'Parameter may not exist in this Oracle version'
+      WHEN MAX(occ.param_exists) = 0 THEN 'Parameter may not exist in this Oracle version'
       ELSE 'ALTER SYSTEM SET O7_DICTIONARY_ACCESSIBILITY=FALSE SCOPE = SPFILE;'
     END || '</td>' ||
   '</tr>'
-FROM o7_check;
+ELSE '' END
+FROM o7_check_combined occ;
 
--- 2.2.6 OS_ROLES
-SELECT '<tr class="' ||
+-- 2.2.5 O7_DICTIONARY_ACCESSIBILITY (12c+ Multi-tenant Container Database)
+WITH mt_o7_check AS (
+  SELECT DISTINCT 
+    UPPER(V.VALUE) AS PARAM_VALUE,
+    DECODE(V.CON_ID,
+      0, (SELECT NAME FROM V$DATABASE),
+      1, (SELECT NAME FROM V$DATABASE),
+      (SELECT NAME FROM V$PDBS B WHERE V.CON_ID = B.CON_ID)
+    ) AS CONTAINER_NAME,
+    V.CON_ID
+  FROM V$SYSTEM_PARAMETER V
+  WHERE UPPER(V.NAME) = 'O7_DICTIONARY_ACCESSIBILITY'
+    AND EXISTS (SELECT 1 FROM v$instance WHERE version NOT LIKE '11.%')
+    AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+    AND SYS_CONTEXT('USERENV', 'CON_NAME') = 'CDB$ROOT'
+)
+SELECT CASE 
+  WHEN mt_context.is_mt_context = 1 THEN
+    '<tr class="' ||
+    CASE 
+      WHEN COUNT(*) = 0 THEN 'warning'
+      WHEN COUNT(CASE WHEN moc.PARAM_VALUE != 'FALSE' AND moc.PARAM_VALUE IS NOT NULL THEN 1 END) = 0 THEN 'pass'
+      ELSE 'fail'
+    END || '">' ||
+    '<td>2.2.5b</td>' ||
+    '<td>Ensure O7_DICTIONARY_ACCESSIBILITY Is Set to FALSE - Multi-tenant (Scored)</td>' ||
+    '<td>' || 
+      CASE 
+        WHEN COUNT(*) = 0 THEN 'N/A'
+        WHEN COUNT(CASE WHEN moc.PARAM_VALUE != 'FALSE' AND moc.PARAM_VALUE IS NOT NULL THEN 1 END) = 0 THEN 'PASS'
+        ELSE 'FAIL'
+      END || '</td>' ||
+    '<td>' || 
+      CASE WHEN COUNT(*) > 0 THEN 
+        LISTAGG(moc.CONTAINER_NAME || ':' || NVL(moc.PARAM_VALUE, 'FALSE(default)'), ', ') WITHIN GROUP (ORDER BY moc.CONTAINER_NAME)
+      ELSE 'Parameter not found in containers'
+      END || '</td>' ||
+    '<td>FALSE for all containers</td>' ||
+    '<td class="remediation">' ||
+      CASE WHEN COUNT(*) = 0 THEN 'Parameter may not exist in this Oracle version'
+      ELSE 'ALTER SYSTEM SET O7_DICTIONARY_ACCESSIBILITY=FALSE SCOPE = SPFILE; (run in each container)'
+      END || '</td>' ||
+    '</tr>'
+  ELSE ''
+END
+FROM mt_o7_check moc
+CROSS JOIN (
+  SELECT CASE 
+    WHEN EXISTS (SELECT 1 FROM v$instance WHERE version NOT LIKE '11.%') 
+         AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+         AND SYS_CONTEXT('USERENV', 'CON_NAME') = 'CDB$ROOT' THEN 1 
+    ELSE 0 
+  END AS is_mt_context FROM DUAL
+) mt_context
+GROUP BY mt_context.is_mt_context;
+
+-- 2.2.6 OS_ROLES (11g)
+WITH os_roles_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'OS_ROLES'
+  WHERE vi.version LIKE '11.%'
+),
+os_roles_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    UPPER(vsp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'OS_ROLES'
+  WHERE vi.version NOT LIKE '11.%' AND 
+        ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+         ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+),
+os_roles_combined AS (
+  SELECT version, param_value FROM os_roles_11g
+  UNION ALL
+  SELECT version, param_value FROM os_roles_12c_non_mt
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = 'FALSE' THEN 'pass'
+    WHEN MAX(orc.param_value) = 'FALSE' THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>2.2.6</td>' ||
+  '<td>2.2.6a</td>' ||
   '<td>Ensure OS_ROLES Is Set to FALSE (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'FALSE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || VALUE || '</td>' ||
+  '<td>' || CASE WHEN MAX(orc.param_value) = 'FALSE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(orc.param_value), 'NULL') || '</td>' ||
   '<td>FALSE</td>' ||
   '<td class="remediation">ALTER SYSTEM SET OS_ROLES = FALSE SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'OS_ROLES';
+ELSE '' END
+FROM os_roles_combined orc;
 
--- 2.2.7 REMOTE_LISTENER
-SELECT '<tr class="' ||
+-- 2.2.6 OS_ROLES (12c+ Multi-tenant Container Database)
+WITH mt_os_roles AS (
+  SELECT DISTINCT 
+    UPPER(V.VALUE) AS PARAM_VALUE,
+    DECODE(V.CON_ID,
+      0, (SELECT NAME FROM V$DATABASE),
+      1, (SELECT NAME FROM V$DATABASE),
+      (SELECT NAME FROM V$PDBS B WHERE V.CON_ID = B.CON_ID)
+    ) AS CONTAINER_NAME,
+    V.CON_ID
+  FROM V$SYSTEM_PARAMETER V
+  WHERE UPPER(V.NAME) = 'OS_ROLES'
+    AND EXISTS (SELECT 1 FROM v$instance WHERE version NOT LIKE '11.%')
+    AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+    AND SYS_CONTEXT('USERENV', 'CON_NAME') = 'CDB$ROOT'
+)
+SELECT CASE 
+  WHEN mt_context.is_mt_context = 1 THEN
+    '<tr class="' ||
+    CASE 
+      WHEN COUNT(CASE WHEN mor.PARAM_VALUE != 'FALSE' THEN 1 END) = 0 THEN 'pass'
+      ELSE 'fail'
+    END || '">' ||
+    '<td>2.2.6b</td>' ||
+    '<td>Ensure OS_ROLES Is Set to FALSE - Multi-tenant (Scored)</td>' ||
+    '<td>' || CASE WHEN COUNT(CASE WHEN mor.PARAM_VALUE != 'FALSE' THEN 1 END) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+    '<td>' || 
+      CASE WHEN COUNT(*) > 0 THEN 
+        LISTAGG(mor.CONTAINER_NAME || ':' || NVL(mor.PARAM_VALUE, 'NULL'), ', ') WITHIN GROUP (ORDER BY mor.CONTAINER_NAME)
+      ELSE 'No containers found'
+      END || '</td>' ||
+    '<td>FALSE for all containers</td>' ||
+    '<td class="remediation">ALTER SYSTEM SET OS_ROLES = FALSE SCOPE = SPFILE; (run in each container)</td>' ||
+    '</tr>'
+  ELSE ''
+END
+FROM mt_os_roles mor
+CROSS JOIN (
+  SELECT CASE 
+    WHEN EXISTS (SELECT 1 FROM v$instance WHERE version NOT LIKE '11.%') 
+         AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+         AND SYS_CONTEXT('USERENV', 'CON_NAME') = 'CDB$ROOT' THEN 1 
+    ELSE 0 
+  END AS is_mt_context FROM DUAL
+) mt_context
+GROUP BY mt_context.is_mt_context;
+
+-- 2.2.7 REMOTE_LISTENER (11g)
+WITH remote_listener_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'REMOTE_LISTENER'
+  WHERE vi.version LIKE '11.%'
+),
+remote_listener_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    UPPER(vsp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'REMOTE_LISTENER'
+  WHERE vi.version NOT LIKE '11.%' AND 
+        ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+         ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+),
+remote_listener_combined AS (
+  SELECT version, param_value FROM remote_listener_11g
+  UNION ALL
+  SELECT version, param_value FROM remote_listener_12c_non_mt
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN VALUE IS NULL OR LENGTH(TRIM(VALUE)) = 0 THEN 'pass'
+    WHEN MAX(rlc.param_value) IS NULL OR LENGTH(TRIM(MAX(rlc.param_value))) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>2.2.7</td>' ||
+  '<td>2.2.7a</td>' ||
   '<td>Ensure REMOTE_LISTENER Is Empty (Scored)</td>' ||
-  '<td>' || CASE WHEN VALUE IS NULL OR LENGTH(TRIM(VALUE)) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || NVL(VALUE, 'Empty') || '</td>' ||
+  '<td>' || CASE WHEN MAX(rlc.param_value) IS NULL OR LENGTH(TRIM(MAX(rlc.param_value))) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(rlc.param_value), 'Empty') || '</td>' ||
   '<td>Empty</td>' ||
   '<td class="remediation">ALTER SYSTEM SET REMOTE_LISTENER = '''' SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'REMOTE_LISTENER';
+ELSE '' END
+FROM remote_listener_combined rlc;
 
--- 2.2.8 REMOTE_LOGIN_PASSWORDFILE
-SELECT '<tr class="' ||
+-- 2.2.7 REMOTE_LISTENER (12c+ Multi-tenant Container Database)
+WITH mt_remote_listener AS (
+  SELECT DISTINCT 
+    UPPER(V.VALUE) AS PARAM_VALUE,
+    DECODE(V.CON_ID,
+      0, (SELECT NAME FROM V$DATABASE),
+      1, (SELECT NAME FROM V$DATABASE),
+      (SELECT NAME FROM V$PDBS B WHERE V.CON_ID = B.CON_ID)
+    ) AS CONTAINER_NAME,
+    V.CON_ID
+  FROM V$SYSTEM_PARAMETER V
+  WHERE UPPER(V.NAME) = 'REMOTE_LISTENER'
+    AND EXISTS (SELECT 1 FROM v$instance WHERE version NOT LIKE '11.%')
+    AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+    AND SYS_CONTEXT('USERENV', 'CON_NAME') = 'CDB$ROOT'
+)
+SELECT CASE 
+  WHEN mt_context.is_mt_context = 1 THEN
+    '<tr class="' ||
+    CASE 
+      WHEN COUNT(CASE WHEN mtrl.PARAM_VALUE IS NOT NULL AND LENGTH(TRIM(mtrl.PARAM_VALUE)) > 0 THEN 1 END) = 0 THEN 'pass'
+      ELSE 'fail'
+    END || '">' ||
+    '<td>2.2.7b</td>' ||
+    '<td>Ensure REMOTE_LISTENER Is Empty - Multi-tenant (Scored)</td>' ||
+    '<td>' || CASE WHEN COUNT(CASE WHEN mtrl.PARAM_VALUE IS NOT NULL AND LENGTH(TRIM(mtrl.PARAM_VALUE)) > 0 THEN 1 END) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+    '<td>' || 
+      CASE WHEN COUNT(*) > 0 THEN 
+        LISTAGG(mtrl.CONTAINER_NAME || ':' || NVL(mtrl.PARAM_VALUE, 'Empty'), ', ') WITHIN GROUP (ORDER BY mtrl.CONTAINER_NAME)
+      ELSE 'No containers found'
+      END || '</td>' ||
+    '<td>Empty for all containers</td>' ||
+    '<td class="remediation">ALTER SYSTEM SET REMOTE_LISTENER = '''' SCOPE = SPFILE; (run in each container)</td>' ||
+    '</tr>'
+  ELSE ''
+END
+FROM mt_remote_listener mtrl
+CROSS JOIN (
+  SELECT CASE 
+    WHEN EXISTS (SELECT 1 FROM v$instance WHERE version NOT LIKE '11.%') 
+         AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+         AND SYS_CONTEXT('USERENV', 'CON_NAME') = 'CDB$ROOT' THEN 1 
+    ELSE 0 
+  END AS is_mt_context FROM DUAL
+) mt_context
+GROUP BY mt_context.is_mt_context;
+
+-- 2.2.8 REMOTE_LOGIN_PASSWORDFILE (11g)
+WITH remote_login_pwdfile_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'REMOTE_LOGIN_PASSWORDFILE'
+  WHERE vi.version LIKE '11.%'
+),
+remote_login_pwdfile_12c AS (
+  SELECT 
+    vi.version,
+    UPPER(vsp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'REMOTE_LOGIN_PASSWORDFILE'
+  WHERE vi.version NOT LIKE '11.%'
+),
+remote_login_pwdfile_combined AS (
+  SELECT version, param_value FROM remote_login_pwdfile_11g
+  UNION ALL
+  SELECT version, param_value FROM remote_login_pwdfile_12c
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = 'NONE' THEN 'pass'
+    WHEN MAX(rlpc.param_value) = 'NONE' THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>2.2.8</td>' ||
   '<td>Ensure REMOTE_LOGIN_PASSWORDFILE Is Set to NONE (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'NONE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || VALUE || '</td>' ||
+  '<td>' || CASE WHEN MAX(rlpc.param_value) = 'NONE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(rlpc.param_value), 'NULL') || '</td>' ||
   '<td>NONE</td>' ||
   '<td class="remediation">ALTER SYSTEM SET REMOTE_LOGIN_PASSWORDFILE = ''NONE'' SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'REMOTE_LOGIN_PASSWORDFILE';
+ELSE '' END
+FROM remote_login_pwdfile_combined rlpc;
 
--- 2.2.9 REMOTE_OS_AUTHENT
-SELECT '<tr class="' ||
+-- 2.2.9 REMOTE_OS_AUTHENT (11g)
+WITH remote_os_authent_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'REMOTE_OS_AUTHENT'
+  WHERE vi.version LIKE '11.%'
+),
+remote_os_authent_12c AS (
+  SELECT 
+    vi.version,
+    UPPER(vsp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'REMOTE_OS_AUTHENT'
+  WHERE vi.version NOT LIKE '11.%'
+),
+remote_os_authent_combined AS (
+  SELECT version, param_value FROM remote_os_authent_11g
+  UNION ALL
+  SELECT version, param_value FROM remote_os_authent_12c
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = 'FALSE' THEN 'pass'
+    WHEN MAX(roac.param_value) = 'FALSE' THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>2.2.9</td>' ||
   '<td>Ensure REMOTE_OS_AUTHENT Is Set to FALSE (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'FALSE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || VALUE || '</td>' ||
+  '<td>' || CASE WHEN MAX(roac.param_value) = 'FALSE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(roac.param_value), 'NULL') || '</td>' ||
   '<td>FALSE</td>' ||
   '<td class="remediation">ALTER SYSTEM SET REMOTE_OS_AUTHENT = FALSE SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'REMOTE_OS_AUTHENT';
+ELSE '' END
+FROM remote_os_authent_combined roac;
 
--- 2.2.10 REMOTE_OS_ROLES
-SELECT '<tr class="' ||
+-- 2.2.10 REMOTE_OS_ROLES (11g)
+WITH remote_os_roles_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'REMOTE_OS_ROLES'
+  WHERE vi.version LIKE '11.%'
+),
+remote_os_roles_12c AS (
+  SELECT 
+    vi.version,
+    UPPER(vsp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'REMOTE_OS_ROLES'
+  WHERE vi.version NOT LIKE '11.%'
+),
+remote_os_roles_combined AS (
+  SELECT version, param_value FROM remote_os_roles_11g
+  UNION ALL
+  SELECT version, param_value FROM remote_os_roles_12c
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = 'FALSE' THEN 'pass'
+    WHEN MAX(rorc.param_value) = 'FALSE' THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>2.2.10</td>' ||
   '<td>Ensure REMOTE_OS_ROLES Is Set to FALSE (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'FALSE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || VALUE || '</td>' ||
+  '<td>' || CASE WHEN MAX(rorc.param_value) = 'FALSE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(rorc.param_value), 'NULL') || '</td>' ||
   '<td>FALSE</td>' ||
   '<td class="remediation">ALTER SYSTEM SET REMOTE_OS_ROLES = FALSE SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'REMOTE_OS_ROLES';
+ELSE '' END
+FROM remote_os_roles_combined rorc;
 
--- 2.2.11 UTL_FILE_DIR
-SELECT '<tr class="' ||
+-- 2.2.11 UTL_FILE_DIR (11g)
+WITH utl_file_dir_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'UTL_FILE_DIR'
+  WHERE vi.version LIKE '11.%'
+),
+utl_file_dir_12c_only AS (
+  SELECT 
+    vi.version,
+    vsp.VALUE AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'UTL_FILE_DIR'
+  WHERE vi.version LIKE '12.%'
+),
+utl_file_dir_18c_19c AS (
+  SELECT 
+    vi.version,
+    'N/A' AS param_value
+  FROM v$instance vi
+  WHERE vi.version LIKE '18.%' OR vi.version LIKE '19.%'
+),
+utl_file_dir_combined AS (
+  SELECT version, param_value FROM utl_file_dir_11g
+  UNION ALL
+  SELECT version, param_value FROM utl_file_dir_12c_only
+  UNION ALL
+  SELECT version, param_value FROM utl_file_dir_18c_19c
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN VALUE IS NULL OR LENGTH(TRIM(VALUE)) = 0 THEN 'pass'
+    WHEN MAX(ufdc.param_value) = 'N/A' THEN 'warning'
+    WHEN MAX(ufdc.param_value) IS NULL OR LENGTH(TRIM(MAX(ufdc.param_value))) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>2.2.11</td>' ||
   '<td>Ensure UTL_FILE_DIR Is Empty (Scored)</td>' ||
-  '<td>' || CASE WHEN VALUE IS NULL OR LENGTH(TRIM(VALUE)) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || NVL(VALUE, 'Empty') || '</td>' ||
-  '<td>Empty</td>' ||
-  '<td class="remediation">ALTER SYSTEM SET UTL_FILE_DIR = '''' SCOPE = SPFILE;</td>' ||
+  '<td>' || 
+    CASE 
+      WHEN MAX(ufdc.param_value) = 'N/A' THEN 'N/A'
+      WHEN MAX(ufdc.param_value) IS NULL OR LENGTH(TRIM(MAX(ufdc.param_value))) = 0 THEN 'PASS' 
+      ELSE 'FAIL' 
+    END || '</td>' ||
+  '<td>' || 
+    CASE 
+      WHEN MAX(ufdc.param_value) = 'N/A' THEN 'Parameter deprecated in 18c+'
+      ELSE NVL(MAX(ufdc.param_value), 'Empty')
+    END || '</td>' ||
+  '<td>Empty (deprecated in 18c+)</td>' ||
+  '<td class="remediation">' ||
+    CASE 
+      WHEN MAX(ufdc.param_value) = 'N/A' THEN 'Use UTL_FILE_DIR initialization parameter is deprecated in 18c+. Use CREATE DIRECTORY instead.'
+      ELSE 'ALTER SYSTEM SET UTL_FILE_DIR = '''' SCOPE = SPFILE;'
+    END || '</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'UTL_FILE_DIR';
+ELSE '' END
+FROM utl_file_dir_combined ufdc;
 
--- 2.2.12 SEC_CASE_SENSITIVE_LOGON
-SELECT '<tr class="' ||
+-- 2.2.12 SEC_CASE_SENSITIVE_LOGON (11g)
+WITH sec_case_sensitive_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'SEC_CASE_SENSITIVE_LOGON'
+  WHERE vi.version LIKE '11.%'
+),
+sec_case_sensitive_12c AS (
+  SELECT 
+    vi.version,
+    UPPER(vsp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'SEC_CASE_SENSITIVE_LOGON'
+  WHERE vi.version NOT LIKE '11.%'
+),
+sec_case_sensitive_combined AS (
+  SELECT version, param_value FROM sec_case_sensitive_11g
+  UNION ALL
+  SELECT version, param_value FROM sec_case_sensitive_12c
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = 'TRUE' THEN 'pass'
+    WHEN MAX(scsc.param_value) = 'TRUE' THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>2.2.12</td>' ||
   '<td>Ensure SEC_CASE_SENSITIVE_LOGON Is Set to TRUE (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'TRUE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || VALUE || '</td>' ||
+  '<td>' || CASE WHEN MAX(scsc.param_value) = 'TRUE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(scsc.param_value), 'NULL') || '</td>' ||
   '<td>TRUE</td>' ||
   '<td class="remediation">ALTER SYSTEM SET SEC_CASE_SENSITIVE_LOGON = TRUE SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'SEC_CASE_SENSITIVE_LOGON';
+ELSE '' END
+FROM sec_case_sensitive_combined scsc;
 
--- 2.2.13 SEC_MAX_FAILED_LOGIN_ATTEMPTS
-SELECT '<tr class="' ||
+-- 2.2.13 SEC_MAX_FAILED_LOGIN_ATTEMPTS (11g)
+WITH sec_max_failed_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'SEC_MAX_FAILED_LOGIN_ATTEMPTS'
+  WHERE vi.version LIKE '11.%'
+),
+sec_max_failed_12c AS (
+  SELECT 
+    vi.version,
+    UPPER(vsp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'SEC_MAX_FAILED_LOGIN_ATTEMPTS'
+  WHERE vi.version NOT LIKE '11.%'
+),
+sec_max_failed_combined AS (
+  SELECT version, param_value FROM sec_max_failed_11g
+  UNION ALL
+  SELECT version, param_value FROM sec_max_failed_12c
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = '10' OR (REGEXP_LIKE(VALUE, '^[0-9]+$') AND TO_NUMBER(VALUE) = 10) THEN 'pass'
+    WHEN MAX(smfc.param_value) = '3' OR (REGEXP_LIKE(MAX(smfc.param_value), '^[0-9]+$') AND TO_NUMBER(MAX(smfc.param_value)) = 3) THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>2.2.13</td>' ||
-  '<td>Ensure SEC_MAX_FAILED_LOGIN_ATTEMPTS Is Set to 10 (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = '10' OR (REGEXP_LIKE(VALUE, '^[0-9]+$') AND TO_NUMBER(VALUE) = 10) THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || VALUE || '</td>' ||
-  '<td>10</td>' ||
-  '<td class="remediation">ALTER SYSTEM SET SEC_MAX_FAILED_LOGIN_ATTEMPTS = 10 SCOPE = SPFILE;</td>' ||
+  '<td>Ensure SEC_MAX_FAILED_LOGIN_ATTEMPTS Is Set to 3 (Scored)</td>' ||
+  '<td>' || CASE WHEN MAX(smfc.param_value) = '3' OR (REGEXP_LIKE(MAX(smfc.param_value), '^[0-9]+$') AND TO_NUMBER(MAX(smfc.param_value)) = 3) THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(smfc.param_value), 'NULL') || '</td>' ||
+  '<td>3</td>' ||
+  '<td class="remediation">ALTER SYSTEM SET SEC_MAX_FAILED_LOGIN_ATTEMPTS = 3 SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'SEC_MAX_FAILED_LOGIN_ATTEMPTS';
+ELSE '' END
+FROM sec_max_failed_combined smfc;
 
--- 2.2.14 SEC_PROTOCOL_ERROR_FURTHER_ACTION
-SELECT '<tr class="' ||
-    CASE 
-        WHEN UPPER(VALUE) LIKE '%DROP%3%' OR UPPER(VALUE) LIKE '%DELAY%3%' THEN 'pass'
-        ELSE 'fail'
-    END || '">' ||
+-- 2.2.14 SEC_PROTOCOL_ERROR_FURTHER_ACTION (11g)
+WITH sec_protocol_further_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'SEC_PROTOCOL_ERROR_FURTHER_ACTION'
+  WHERE vi.version LIKE '11.%'
+),
+sec_protocol_further_12c AS (
+  SELECT 
+    vi.version,
+    UPPER(vsp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'SEC_PROTOCOL_ERROR_FURTHER_ACTION'
+  WHERE vi.version NOT LIKE '11.%'
+),
+sec_protocol_further_combined AS (
+  SELECT version, param_value FROM sec_protocol_further_11g
+  UNION ALL
+  SELECT version, param_value FROM sec_protocol_further_12c
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN MAX(spfc.param_value) LIKE '%DROP%3%' OR MAX(spfc.param_value) LIKE '%DELAY%3%' THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
   '<td>2.2.14</td>' ||
   '<td>Ensure SEC_PROTOCOL_ERROR_FURTHER_ACTION Is Set to DELAY,3 or DROP,3 (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) LIKE '%DROP%3%' OR UPPER(VALUE) LIKE '%DELAY%3%' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || NVL(VALUE, 'Not Set') || '</td>' ||
+  '<td>' || CASE WHEN MAX(spfc.param_value) LIKE '%DROP%3%' OR MAX(spfc.param_value) LIKE '%DELAY%3%' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(spfc.param_value), 'Not Set') || '</td>' ||
   '<td>DELAY,3 or DROP,3</td>' ||
   '<td class="remediation">ALTER SYSTEM SET SEC_PROTOCOL_ERROR_FURTHER_ACTION = ''DELAY,3'' SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'SEC_PROTOCOL_ERROR_FURTHER_ACTION';
+ELSE '' END
+FROM sec_protocol_further_combined spfc;
 
--- 2.2.15 SEC_PROTOCOL_ERROR_TRACE_ACTION
-SELECT '<tr class="' ||
+-- 2.2.15 SEC_PROTOCOL_ERROR_TRACE_ACTION (11g)
+WITH sec_protocol_trace_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'SEC_PROTOCOL_ERROR_TRACE_ACTION'
+  WHERE vi.version LIKE '11.%'
+),
+sec_protocol_trace_12c AS (
+  SELECT 
+    vi.version,
+    UPPER(vsp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'SEC_PROTOCOL_ERROR_TRACE_ACTION'
+  WHERE vi.version NOT LIKE '11.%'
+),
+sec_protocol_trace_combined AS (
+  SELECT version, param_value FROM sec_protocol_trace_11g
+  UNION ALL
+  SELECT version, param_value FROM sec_protocol_trace_12c
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = 'LOG' THEN 'pass'
+    WHEN MAX(sptc.param_value) = 'LOG' THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>2.2.15</td>' ||
   '<td>Ensure SEC_PROTOCOL_ERROR_TRACE_ACTION Is Set to LOG (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'LOG' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || NVL(VALUE, 'Not Set') || '</td>' ||
+  '<td>' || CASE WHEN MAX(sptc.param_value) = 'LOG' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(sptc.param_value), 'Not Set') || '</td>' ||
   '<td>LOG</td>' ||
   '<td class="remediation">ALTER SYSTEM SET SEC_PROTOCOL_ERROR_TRACE_ACTION=LOG SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'SEC_PROTOCOL_ERROR_TRACE_ACTION';
+ELSE '' END
+FROM sec_protocol_trace_combined sptc;
 
--- 2.2.16 SEC_RETURN_SERVER_RELEASE_BANNER
-SELECT '<tr class="' ||
+-- 2.2.16 SEC_RETURN_SERVER_RELEASE_BANNER (11g)
+WITH sec_return_banner_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'SEC_RETURN_SERVER_RELEASE_BANNER'
+  WHERE vi.version LIKE '11.%'
+),
+sec_return_banner_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    UPPER(vsp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'SEC_RETURN_SERVER_RELEASE_BANNER'
+  WHERE vi.version NOT LIKE '11.%' AND 
+        ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+         ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+),
+sec_return_banner_combined AS (
+  SELECT version, param_value FROM sec_return_banner_11g
+  UNION ALL
+  SELECT version, param_value FROM sec_return_banner_12c_non_mt
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = 'FALSE' THEN 'pass'
+    WHEN MAX(srbc.param_value) = 'FALSE' THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>2.2.16</td>' ||
   '<td>Ensure SEC_RETURN_SERVER_RELEASE_BANNER Is Set to FALSE (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'FALSE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || NVL(VALUE, 'Not Set') || '</td>' ||
+  '<td>' || CASE WHEN MAX(srbc.param_value) = 'FALSE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(srbc.param_value), 'Not Set') || '</td>' ||
   '<td>FALSE</td>' ||
   '<td class="remediation">ALTER SYSTEM SET SEC_RETURN_SERVER_RELEASE_BANNER = FALSE SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'SEC_RETURN_SERVER_RELEASE_BANNER';
+ELSE '' END
+FROM sec_return_banner_combined srbc;
 
--- 2.2.17 SQL92_SECURITY
-SELECT '<tr class="' ||
+-- 2.2.17 SQL92_SECURITY (11g and 12c+)
+WITH sql92_security_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'SQL92_SECURITY'
+  WHERE vi.version LIKE '11.%'
+),
+sql92_security_12c AS (
+  SELECT 
+    vi.version,
+    UPPER(vsp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'SQL92_SECURITY'
+  WHERE vi.version NOT LIKE '11.%'
+),
+sql92_security_combined AS (
+  SELECT version, param_value FROM sql92_security_11g
+  UNION ALL
+  SELECT version, param_value FROM sql92_security_12c
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = 'TRUE' THEN 'pass'
+    WHEN MAX(ssc.param_value) = 'TRUE' THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>2.2.17</td>' ||
   '<td>Ensure SQL92_SECURITY Is Set to TRUE (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'TRUE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || VALUE || '</td>' ||
+  '<td>' || CASE WHEN MAX(ssc.param_value) = 'TRUE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(ssc.param_value), 'Not Set') || '</td>' ||
   '<td>TRUE</td>' ||
   '<td class="remediation">ALTER SYSTEM SET SQL92_SECURITY = TRUE SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'SQL92_SECURITY';
+ELSE '' END
+FROM sql92_security_combined ssc;
 
--- 2.2.18 _TRACE_FILES_PUBLIC
-SELECT '<tr class="' ||
+-- 2.2.17b SQL92_SECURITY (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
   CASE 
-    WHEN VALUE = 'FALSE' OR VALUE IS NULL THEN 'pass'
+    WHEN COUNT(DISTINCT CASE WHEN UPPER(V.VALUE) != 'TRUE' THEN 1 END) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>2.2.17b</td>' ||
+  '<td>Ensure SQL92_SECURITY Is Set to TRUE in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(DISTINCT CASE WHEN UPPER(V.VALUE) != 'TRUE' THEN 1 END) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || LISTAGG(DECODE(V.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE V.CON_ID = B.CON_ID)) || ':' || V.VALUE, '; ') WITHIN GROUP (ORDER BY V.CON_ID) || '</td>' ||
+  '<td>TRUE for all containers</td>' ||
+  '<td class="remediation">For each container: ALTER SYSTEM SET SQL92_SECURITY = TRUE SCOPE = SPFILE;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    v.CON_ID,
+    v.VALUE
+  FROM V$SYSTEM_PARAMETER v
+  WHERE UPPER(v.NAME) = 'SQL92_SECURITY'
+) V
+GROUP BY ef.env_type;
+
+-- 2.2.18 _TRACE_FILES_PUBLIC (11g and 12c+)
+WITH trace_files_public_11g AS (
+  SELECT 
+    vi.version,
+    vp.VALUE AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON vp.NAME = '_trace_files_public'
+  WHERE vi.version LIKE '11.%'
+),
+trace_files_public_12c AS (
+  SELECT 
+    vi.version,
+    b.KSPPSTVL AS param_value
+  FROM v$instance vi
+  LEFT JOIN (
+    SELECT b.KSPPSTVL
+    FROM SYS.X$KSPPI a, SYS.X$KSPPCV b
+    WHERE A.INDX = B.INDX
+    AND A.KSPPINM LIKE '\_%trace_files_public' ESCAPE '\'
+  ) b ON 1=1
+  WHERE vi.version NOT LIKE '11.%'
+),
+trace_files_public_combined AS (
+  SELECT version, param_value FROM trace_files_public_11g
+  UNION ALL
+  SELECT version, param_value FROM trace_files_public_12c
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN MAX(tfpc.param_value) = 'FALSE' OR MAX(tfpc.param_value) IS NULL THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>2.2.18</td>' ||
   '<td>Ensure _TRACE_FILES_PUBLIC Is Set to FALSE (Scored)</td>' ||
-  '<td>' || CASE WHEN VALUE = 'FALSE' OR VALUE IS NULL THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || NVL(VALUE, 'FALSE (default)') || '</td>' ||
+  '<td>' || CASE WHEN MAX(tfpc.param_value) = 'FALSE' OR MAX(tfpc.param_value) IS NULL THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(tfpc.param_value), 'FALSE (default)') || '</td>' ||
   '<td>FALSE</td>' ||
   '<td class="remediation">ALTER SYSTEM SET "_trace_files_public" = FALSE SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE NAME = '_trace_files_public';
+ELSE '' END
+FROM trace_files_public_combined tfpc;
 
--- 2.2.19 RESOURCE_LIMIT
-SELECT '<tr class="' ||
+-- 2.2.19 RESOURCE_LIMIT (11g and 12c+ non-multitenant/PDB)
+WITH resource_limit_11g AS (
+  SELECT 
+    vi.version,
+    UPPER(vp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$PARAMETER vp ON UPPER(vp.NAME) = 'RESOURCE_LIMIT'
+  WHERE vi.version LIKE '11.%'
+),
+resource_limit_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    UPPER(vsp.VALUE) AS param_value
+  FROM v$instance vi
+  LEFT JOIN V$SYSTEM_PARAMETER vsp ON UPPER(vsp.NAME) = 'RESOURCE_LIMIT'
+  WHERE vi.version NOT LIKE '11.%' AND 
+        ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+         ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+),
+resource_limit_combined AS (
+  SELECT version, param_value FROM resource_limit_11g
+  UNION ALL
+  SELECT version, param_value FROM resource_limit_12c_non_mt
+)
+SELECT CASE WHEN COUNT(*) > 0 THEN
+  '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = 'TRUE' THEN 'pass'
+    WHEN MAX(rlc.param_value) = 'TRUE' THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>2.2.19</td>' ||
   '<td>Ensure RESOURCE_LIMIT Is Set to TRUE (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'TRUE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || VALUE || '</td>' ||
+  '<td>' || CASE WHEN MAX(rlc.param_value) = 'TRUE' THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(MAX(rlc.param_value), 'Not Set') || '</td>' ||
   '<td>TRUE</td>' ||
   '<td class="remediation">ALTER SYSTEM SET RESOURCE_LIMIT = TRUE SCOPE = SPFILE;</td>' ||
   '</tr>'
-FROM V$PARAMETER
-WHERE UPPER(NAME) = 'RESOURCE_LIMIT';
+ELSE '' END
+FROM resource_limit_combined rlc;
+
+-- 2.2.19b RESOURCE_LIMIT (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(DISTINCT CASE WHEN UPPER(V.VALUE) != 'TRUE' THEN 1 END) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>2.2.19b</td>' ||
+  '<td>Ensure RESOURCE_LIMIT Is Set to TRUE in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(DISTINCT CASE WHEN UPPER(V.VALUE) != 'TRUE' THEN 1 END) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || LISTAGG(DECODE(V.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE V.CON_ID = B.CON_ID)) || ':' || V.VALUE, '; ') WITHIN GROUP (ORDER BY V.CON_ID) || '</td>' ||
+  '<td>TRUE for all containers</td>' ||
+  '<td class="remediation">For each container: ALTER SYSTEM SET RESOURCE_LIMIT = TRUE SCOPE = SPFILE;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    v.CON_ID,
+    v.VALUE
+  FROM V$SYSTEM_PARAMETER v
+  WHERE UPPER(v.NAME) = 'RESOURCE_LIMIT'
+) V
+GROUP BY ef.env_type;
+
+-- 2.2.20 PDB_OS_CREDENTIAL (18c+ only)
+SELECT CASE WHEN vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(vsp.VALUE) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>2.2.20</td>' ||
+  '<td>Ensure PDB_OS_CREDENTIAL Is Set to NULL (18c+) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(vsp.VALUE) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(vsp.VALUE) > 0 THEN 
+      LISTAGG(DECODE(vsp.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE vsp.CON_ID = B.CON_ID)) || ':' || vsp.VALUE, '; ') WITHIN GROUP (ORDER BY vsp.CON_ID)
+    ELSE 'NULL (compliant)'
+    END || '</td>' ||
+  '<td>NULL for all containers</td>' ||
+  '<td class="remediation">Using DBMS_CREDENTIAL package, ensure credentials are set for standalone, container and pluggable databases</td>' ||
+  '</tr>'
+ELSE '' END
+FROM v$instance vi
+CROSS JOIN (
+  SELECT CON_ID, VALUE
+  FROM V$SYSTEM_PARAMETER
+  WHERE UPPER(NAME) = 'PDB_OS_CREDENTIAL' AND VALUE IS NOT NULL
+) vsp
+GROUP BY vi.version;
 
 -- 12c+ Specific Parameters
 SELECT CASE WHEN vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
   '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) IN ('C##', 'c##') THEN 'pass'
+    WHEN UPPER(vp.VALUE) IN ('C##', 'c##') THEN 'pass'
     ELSE 'warning'
   END || '">' ||
-  '<td>2.2.20</td>' ||
+  '<td>2.2.21</td>' ||
   '<td>Ensure COMMON_USER_PREFIX Is Set Appropriately (12c+) (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) IN ('C##', 'c##') THEN 'PASS' ELSE 'WARNING' END || '</td>' ||
-  '<td>' || NVL(VALUE, 'Not Set') || '</td>' ||
+  '<td>' || CASE WHEN UPPER(vp.VALUE) IN ('C##', 'c##') THEN 'PASS' ELSE 'WARNING' END || '</td>' ||
+  '<td>' || NVL(vp.VALUE, 'Not Set') || '</td>' ||
   '<td>C## (default)</td>' ||
   '<td class="remediation">Maintain default or set organizational standard</td>' ||
   '</tr>'
 ELSE '' END
-FROM V$PARAMETER vp, v$instance vi
-WHERE UPPER(vp.NAME) = 'COMMON_USER_PREFIX' 
-  AND (vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version LIKE '19.%');
+FROM V$PARAMETER vp CROSS JOIN v$instance vi
+WHERE UPPER(vp.NAME) = 'COMMON_USER_PREFIX';
 
 -- 12c+ ENABLE_DDL_LOGGING
 SELECT CASE WHEN vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
   '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = 'TRUE' THEN 'pass'
+    WHEN UPPER(vp.VALUE) = 'TRUE' THEN 'pass'
     ELSE 'warning'
   END || '">' ||
-  '<td>2.2.21</td>' ||
+  '<td>2.2.22</td>' ||
   '<td>Ensure ENABLE_DDL_LOGGING Is Set to TRUE (12c+) (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'TRUE' THEN 'PASS' ELSE 'WARNING' END || '</td>' ||
-  '<td>' || VALUE || '</td>' ||
+  '<td>' || CASE WHEN UPPER(vp.VALUE) = 'TRUE' THEN 'PASS' ELSE 'WARNING' END || '</td>' ||
+  '<td>' || vp.VALUE || '</td>' ||
   '<td>TRUE</td>' ||
   '<td class="remediation">ALTER SYSTEM SET ENABLE_DDL_LOGGING=TRUE</td>' ||
   '</tr>'
 ELSE '' END
-FROM V$PARAMETER vp, v$instance vi
-WHERE UPPER(vp.NAME) = 'ENABLE_DDL_LOGGING' 
-  AND (vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version LIKE '19.%');
+FROM V$PARAMETER vp CROSS JOIN v$instance vi
+WHERE UPPER(vp.NAME) = 'ENABLE_DDL_LOGGING';
 
 -- 18c+ LDAP_DIRECTORY_SYSAUTH
 SELECT CASE WHEN vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
   '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = 'NO' OR VALUE IS NULL THEN 'pass'
+    WHEN UPPER(vp.VALUE) = 'NO' OR vp.VALUE IS NULL THEN 'pass'
     ELSE 'warning'
   END || '">' ||
-  '<td>2.2.22</td>' ||
+  '<td>2.2.23</td>' ||
   '<td>Ensure LDAP_DIRECTORY_SYSAUTH Is Set to NO (18c+) (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'NO' OR VALUE IS NULL THEN 'PASS' ELSE 'WARNING' END || '</td>' ||
-  '<td>' || NVL(VALUE, 'NO (default)') || '</td>' ||
+  '<td>' || CASE WHEN UPPER(vp.VALUE) = 'NO' OR vp.VALUE IS NULL THEN 'PASS' ELSE 'WARNING' END || '</td>' ||
+  '<td>' || NVL(vp.VALUE, 'NO (default)') || '</td>' ||
   '<td>NO</td>' ||
   '<td class="remediation">ALTER SYSTEM SET LDAP_DIRECTORY_SYSAUTH=NO SCOPE=SPFILE</td>' ||
   '</tr>'
 ELSE '' END
-FROM V$PARAMETER vp, v$instance vi
-WHERE UPPER(vp.NAME) = 'LDAP_DIRECTORY_SYSAUTH' 
-  AND (vi.version LIKE '18.%' OR vi.version LIKE '19.%');
+FROM V$PARAMETER vp CROSS JOIN v$instance vi
+WHERE UPPER(vp.NAME) = 'LDAP_DIRECTORY_SYSAUTH';
 
 -- 19c+ ALLOW_GROUP_ACCESS_TO_SGA
 SELECT CASE WHEN vi.version LIKE '19.%' THEN
   '<tr class="' ||
   CASE 
-    WHEN UPPER(VALUE) = 'FALSE' OR VALUE IS NULL THEN 'pass'
+    WHEN UPPER(vp.VALUE) = 'FALSE' OR vp.VALUE IS NULL THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>2.2.23</td>' ||
+  '<td>2.2.24</td>' ||
   '<td>Ensure ALLOW_GROUP_ACCESS_TO_SGA Is Set to FALSE (19c) (Scored)</td>' ||
-  '<td>' || CASE WHEN UPPER(VALUE) = 'FALSE' OR VALUE IS NULL THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || NVL(VALUE, 'FALSE (default)') || '</td>' ||
+  '<td>' || CASE WHEN UPPER(vp.VALUE) = 'FALSE' OR vp.VALUE IS NULL THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || NVL(vp.VALUE, 'FALSE (default)') || '</td>' ||
   '<td>FALSE</td>' ||
   '<td class="remediation">ALTER SYSTEM SET ALLOW_GROUP_ACCESS_TO_SGA=FALSE SCOPE=SPFILE</td>' ||
   '</tr>'
 ELSE '' END
-FROM V$PARAMETER vp, v$instance vi
-WHERE UPPER(vp.NAME) = 'ALLOW_GROUP_ACCESS_TO_SGA' 
-  AND vi.version LIKE '19.%';
+FROM V$PARAMETER vp CROSS JOIN v$instance vi
+WHERE UPPER(vp.NAME) = 'ALLOW_GROUP_ACCESS_TO_SGA';
 
 PROMPT </table>
+
+-- Section 2.3: SQLNET.ORA Settings (18c+)
+SELECT CASE WHEN vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
+  '<h2 id="section2_3">2.3 SQLNET.ORA Settings (18c+)</h2>' ||
+  '<table>' ||
+  '<tr><th width="5%">Control</th><th width="35%">Title</th><th width="8%">Status</th><th width="20%">Current Value</th><th width="15%">Expected</th><th width="17%">Remediation</th></tr>'
+ELSE '' END
+FROM v$instance vi;
+
+-- 2.3.1 ENCRYPTION_SERVER (18c+)
+SELECT CASE WHEN vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
+  '<tr class="warning">' ||
+  '<td>2.3.1</td>' ||
+  '<td>Ensure ENCRYPTION_SERVER Is Set to REQUIRED (18c+) (Scored)</td>' ||
+  '<td>MANUAL_CHECK</td>' ||
+  '<td>Execute: grep -i "encryption_server=required" $ORACLE_HOME/network/admin/sqlnet.ora</td>' ||
+  '<td>REQUIRED</td>' ||
+  '<td class="remediation">Edit $ORACLE_HOME/network/admin/sqlnet.ora: encryption_server = required</td>' ||
+  '</tr>'
+ELSE '' END
+FROM v$instance vi;
+
+-- 2.3.2 SQLNET.CRYPTO_CHECKSUM_SERVER (18c+)
+SELECT CASE WHEN vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
+  '<tr class="warning">' ||
+  '<td>2.3.2</td>' ||
+  '<td>Ensure SQLNET.CRYPTO_CHECKSUM_SERVER Is Set to REQUIRED (18c+) (Scored)</td>' ||
+  '<td>MANUAL_CHECK</td>' ||
+  '<td>Execute: grep -i "crypto_checksum_server=required" $ORACLE_HOME/network/admin/sqlnet.ora</td>' ||
+  '<td>REQUIRED</td>' ||
+  '<td class="remediation">Edit $ORACLE_HOME/network/admin/sqlnet.ora: sqlnet.crypto_checksum_server = required</td>' ||
+  '</tr>'
+ELSE '' END
+FROM v$instance vi;
+
+SELECT CASE WHEN vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
+  '</table>'
+ELSE '' END
+FROM v$instance vi;
 
 -- Section 3: Oracle Connection and Login Restrictions
 PROMPT <h2 id="section3">3. Oracle Connection and Login Restrictions</h2>
 PROMPT <table>
 PROMPT <tr><th width="5%">Control</th><th width="35%">Title</th><th width="8%">Status</th><th width="20%">Current Value</th><th width="15%">Expected</th><th width="17%">Remediation</th></tr>
 
--- 3.1 FAILED_LOGIN_ATTEMPTS
+-- 3.1 FAILED_LOGIN_ATTEMPTS (11g and 12c+ non-multitenant/PDB)
+WITH failed_login_11g AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version LIKE '11.%'
+  AND p.RESOURCE_NAME = 'FAILED_LOGIN_ATTEMPTS'
+  AND (p.LIMIT = 'DEFAULT' OR p.LIMIT = 'UNLIMITED' OR TO_NUMBER(p.LIMIT) > 5)
+),
+failed_login_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND TO_NUMBER(DECODE(p.LIMIT,
+        'DEFAULT',(SELECT DISTINCT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                   FROM DBA_PROFILES
+                   WHERE PROFILE='DEFAULT'
+                   AND RESOURCE_NAME='FAILED_LOGIN_ATTEMPTS'),
+        'UNLIMITED','9999',
+        p.LIMIT)) > 5
+  AND p.RESOURCE_NAME = 'FAILED_LOGIN_ATTEMPTS'
+  AND EXISTS (SELECT 'X' FROM DBA_USERS u WHERE u.PROFILE = p.PROFILE)
+),
+failed_login_combined AS (
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM failed_login_11g
+  UNION ALL
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM failed_login_12c_non_mt
+)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN (SELECT COUNT(*) FROM failed_login_combined) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>3.1</td>' ||
   '<td>Ensure FAILED_LOGIN_ATTEMPTS Is Less than or Equal to 5 (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM failed_login_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE)
+    CASE WHEN (SELECT COUNT(*) FROM failed_login_combined) > 0 THEN 
+      (SELECT LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE) FROM failed_login_combined)
     ELSE 'All profiles compliant (5 or less)'
     END || '</td>' ||
   '<td>Less than or equal to 5 for all profiles</td>' ||
   '<td class="remediation">ALTER PROFILE DEFAULT LIMIT FAILED_LOGIN_ATTEMPTS 5;</td>' ||
   '</tr>'
-FROM DBA_PROFILES
-WHERE RESOURCE_NAME='FAILED_LOGIN_ATTEMPTS'
-AND (LIMIT = 'DEFAULT' OR LIMIT = 'UNLIMITED' OR TO_NUMBER(LIMIT) > 5);
+FROM DUAL;
 
--- 3.2 PASSWORD_LOCK_TIME
+-- 3.1b FAILED_LOGIN_ATTEMPTS (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(P.PROFILE) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>3.1b</td>' ||
+  '<td>Ensure FAILED_LOGIN_ATTEMPTS Is Less than or Equal to 5 in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(P.PROFILE) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(P.PROFILE) > 0 THEN 
+      LISTAGG(DECODE(P.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE P.CON_ID = B.CON_ID)) || ':' || P.PROFILE || ':' || P.LIMIT, '; ') WITHIN GROUP (ORDER BY P.CON_ID, P.PROFILE)
+    ELSE 'All profiles compliant in all containers'
+    END || '</td>' ||
+  '<td>Less than or equal to 5 for all profiles in all containers</td>' ||
+  '<td class="remediation">For each container: ALTER PROFILE DEFAULT LIMIT FAILED_LOGIN_ATTEMPTS 5;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    p.CON_ID,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM CDB_PROFILES p
+  WHERE TO_NUMBER(DECODE(p.LIMIT,
+          'DEFAULT',(SELECT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                     FROM CDB_PROFILES
+                     WHERE PROFILE='DEFAULT'
+                     AND RESOURCE_NAME='FAILED_LOGIN_ATTEMPTS'
+                     AND CON_ID = p.CON_ID),
+          'UNLIMITED','9999',p.LIMIT)) > 5
+  AND p.RESOURCE_NAME = 'FAILED_LOGIN_ATTEMPTS'
+  AND EXISTS (SELECT 'X' FROM CDB_USERS u WHERE u.PROFILE = p.PROFILE AND u.CON_ID = p.CON_ID)
+) P
+GROUP BY ef.env_type;
+
+-- 3.2 PASSWORD_LOCK_TIME (11g and 12c+ non-multitenant/PDB)
+WITH password_lock_11g AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version LIKE '11.%'
+  AND p.RESOURCE_NAME = 'PASSWORD_LOCK_TIME'
+  AND (p.LIMIT = 'DEFAULT' OR p.LIMIT = 'UNLIMITED' OR TO_NUMBER(p.LIMIT) < 1)
+),
+password_lock_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND TO_NUMBER(DECODE(p.LIMIT,
+        'DEFAULT',(SELECT DISTINCT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                   FROM DBA_PROFILES
+                   WHERE PROFILE='DEFAULT'
+                   AND RESOURCE_NAME='PASSWORD_LOCK_TIME'),
+        'UNLIMITED','9999',
+        p.LIMIT)) < 1
+  AND p.RESOURCE_NAME = 'PASSWORD_LOCK_TIME'
+  AND EXISTS (SELECT 'X' FROM DBA_USERS u WHERE u.PROFILE = p.PROFILE)
+),
+password_lock_combined AS (
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM password_lock_11g
+  UNION ALL
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM password_lock_12c_non_mt
+)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN (SELECT COUNT(*) FROM password_lock_combined) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>3.2</td>' ||
   '<td>Ensure PASSWORD_LOCK_TIME Is Greater than or Equal to 1 (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM password_lock_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE)
+    CASE WHEN (SELECT COUNT(*) FROM password_lock_combined) > 0 THEN 
+      (SELECT LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE) FROM password_lock_combined)
     ELSE 'All profiles compliant (1 or more)'
     END || '</td>' ||
   '<td>Greater than or equal to 1 for all profiles</td>' ||
   '<td class="remediation">ALTER PROFILE DEFAULT LIMIT PASSWORD_LOCK_TIME 1;</td>' ||
   '</tr>'
-FROM DBA_PROFILES
-WHERE RESOURCE_NAME='PASSWORD_LOCK_TIME'
-AND (LIMIT = 'DEFAULT' OR LIMIT != 'UNLIMITED' OR TO_NUMBER(LIMIT) < 1);
+FROM DUAL;
 
--- 3.3 PASSWORD_LIFE_TIME
+-- 3.2b PASSWORD_LOCK_TIME (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(P.PROFILE) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>3.2b</td>' ||
+  '<td>Ensure PASSWORD_LOCK_TIME Is Greater than or Equal to 1 in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(P.PROFILE) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(P.PROFILE) > 0 THEN 
+      LISTAGG(DECODE(P.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE P.CON_ID = B.CON_ID)) || ':' || P.PROFILE || ':' || P.LIMIT, '; ') WITHIN GROUP (ORDER BY P.CON_ID, P.PROFILE)
+    ELSE 'All profiles compliant in all containers'
+    END || '</td>' ||
+  '<td>Greater than or equal to 1 for all profiles in all containers</td>' ||
+  '<td class="remediation">For each container: ALTER PROFILE DEFAULT LIMIT PASSWORD_LOCK_TIME 1;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    p.CON_ID,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM CDB_PROFILES p
+  WHERE TO_NUMBER(DECODE(p.LIMIT,
+          'DEFAULT',(SELECT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                     FROM CDB_PROFILES
+                     WHERE PROFILE='DEFAULT'
+                     AND RESOURCE_NAME='PASSWORD_LOCK_TIME'
+                     AND CON_ID = p.CON_ID),
+          'UNLIMITED','9999',p.LIMIT)) < 1
+  AND p.RESOURCE_NAME = 'PASSWORD_LOCK_TIME'
+  AND EXISTS (SELECT 'X' FROM CDB_USERS u WHERE u.PROFILE = p.PROFILE AND u.CON_ID = p.CON_ID)
+) P
+GROUP BY ef.env_type;
+
+-- 3.3 PASSWORD_LIFE_TIME (11g and 12c+ non-multitenant/PDB)
+WITH password_life_11g AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version LIKE '11.%'
+  AND p.RESOURCE_NAME = 'PASSWORD_LIFE_TIME'
+  AND (p.LIMIT = 'DEFAULT' OR p.LIMIT = 'UNLIMITED' OR TO_NUMBER(p.LIMIT) > 90)
+),
+password_life_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND TO_NUMBER(DECODE(p.LIMIT,
+        'DEFAULT',(SELECT DISTINCT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                   FROM DBA_PROFILES
+                   WHERE PROFILE='DEFAULT'
+                   AND RESOURCE_NAME='PASSWORD_LIFE_TIME'),
+        'UNLIMITED','9999',
+        p.LIMIT)) > 90
+  AND p.RESOURCE_NAME = 'PASSWORD_LIFE_TIME'
+  AND EXISTS (SELECT 'X' FROM DBA_USERS u WHERE u.PROFILE = p.PROFILE)
+),
+password_life_combined AS (
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM password_life_11g
+  UNION ALL
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM password_life_12c_non_mt
+)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN (SELECT COUNT(*) FROM password_life_combined) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>3.3</td>' ||
   '<td>Ensure PASSWORD_LIFE_TIME Is Less than or Equal to 90 (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM password_life_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE)
+    CASE WHEN (SELECT COUNT(*) FROM password_life_combined) > 0 THEN 
+      (SELECT LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE) FROM password_life_combined)
     ELSE 'All profiles compliant (90 or less)'
     END || '</td>' ||
   '<td>Less than or equal to 90 for all profiles</td>' ||
   '<td class="remediation">ALTER PROFILE DEFAULT LIMIT PASSWORD_LIFE_TIME 90;</td>' ||
   '</tr>'
-FROM DBA_PROFILES
-WHERE RESOURCE_NAME='PASSWORD_LIFE_TIME'
-AND (LIMIT = 'DEFAULT' OR LIMIT = 'UNLIMITED' OR TO_NUMBER(LIMIT) > 90);
+FROM DUAL;
 
--- 3.4 PASSWORD_REUSE_MAX
+-- 3.3b PASSWORD_LIFE_TIME (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(P.PROFILE) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>3.3b</td>' ||
+  '<td>Ensure PASSWORD_LIFE_TIME Is Less than or Equal to 90 in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(P.PROFILE) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(P.PROFILE) > 0 THEN 
+      LISTAGG(DECODE(P.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE P.CON_ID = B.CON_ID)) || ':' || P.PROFILE || ':' || P.LIMIT, '; ') WITHIN GROUP (ORDER BY P.CON_ID, P.PROFILE)
+    ELSE 'All profiles compliant in all containers'
+    END || '</td>' ||
+  '<td>Less than or equal to 90 for all profiles in all containers</td>' ||
+  '<td class="remediation">For each container: ALTER PROFILE DEFAULT LIMIT PASSWORD_LIFE_TIME 90;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    p.CON_ID,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM CDB_PROFILES p
+  WHERE TO_NUMBER(DECODE(p.LIMIT,
+          'DEFAULT',(SELECT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                     FROM CDB_PROFILES
+                     WHERE PROFILE='DEFAULT'
+                     AND RESOURCE_NAME='PASSWORD_LIFE_TIME'
+                     AND CON_ID = p.CON_ID),
+          'UNLIMITED','9999',p.LIMIT)) > 90
+  AND p.RESOURCE_NAME = 'PASSWORD_LIFE_TIME'
+  AND EXISTS (SELECT 'X' FROM CDB_USERS u WHERE u.PROFILE = p.PROFILE AND u.CON_ID = p.CON_ID)
+) P
+GROUP BY ef.env_type;
+
+-- 3.4 PASSWORD_REUSE_MAX (11g and 12c+ non-multitenant/PDB)
+WITH password_reuse_max_11g AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version LIKE '11.%'
+  AND p.RESOURCE_NAME = 'PASSWORD_REUSE_MAX'
+  AND (p.LIMIT = 'DEFAULT' OR p.LIMIT = 'UNLIMITED' OR TO_NUMBER(p.LIMIT) < 20)
+),
+password_reuse_max_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND TO_NUMBER(DECODE(p.LIMIT,
+        'DEFAULT',(SELECT DISTINCT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                   FROM DBA_PROFILES
+                   WHERE PROFILE='DEFAULT'
+                   AND RESOURCE_NAME='PASSWORD_REUSE_MAX'),
+        'UNLIMITED','9999',
+        p.LIMIT)) < 20
+  AND p.RESOURCE_NAME = 'PASSWORD_REUSE_MAX'
+  AND EXISTS (SELECT 'X' FROM DBA_USERS u WHERE u.PROFILE = p.PROFILE)
+),
+password_reuse_max_combined AS (
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM password_reuse_max_11g
+  UNION ALL
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM password_reuse_max_12c_non_mt
+)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN (SELECT COUNT(*) FROM password_reuse_max_combined) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>3.4</td>' ||
   '<td>Ensure PASSWORD_REUSE_MAX Is Greater than or Equal to 20 (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM password_reuse_max_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE)
+    CASE WHEN (SELECT COUNT(*) FROM password_reuse_max_combined) > 0 THEN 
+      (SELECT LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE) FROM password_reuse_max_combined)
     ELSE 'All profiles compliant (20 or more)'
     END || '</td>' ||
   '<td>Greater than or equal to 20 for all profiles</td>' ||
   '<td class="remediation">ALTER PROFILE DEFAULT LIMIT PASSWORD_REUSE_MAX 20;</td>' ||
   '</tr>'
-FROM DBA_PROFILES
-WHERE RESOURCE_NAME='PASSWORD_REUSE_MAX'
-AND (LIMIT = 'DEFAULT' OR LIMIT = 'UNLIMITED' OR TO_NUMBER(LIMIT) < 20);
+FROM DUAL;
 
--- 3.5 PASSWORD_REUSE_TIME
+-- 3.4b PASSWORD_REUSE_MAX (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(P.PROFILE) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>3.4b</td>' ||
+  '<td>Ensure PASSWORD_REUSE_MAX Is Greater than or Equal to 20 in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(P.PROFILE) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(P.PROFILE) > 0 THEN 
+      LISTAGG(DECODE(P.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE P.CON_ID = B.CON_ID)) || ':' || P.PROFILE || ':' || P.LIMIT, '; ') WITHIN GROUP (ORDER BY P.CON_ID, P.PROFILE)
+    ELSE 'All profiles compliant in all containers'
+    END || '</td>' ||
+  '<td>Greater than or equal to 20 for all profiles in all containers</td>' ||
+  '<td class="remediation">For each container: ALTER PROFILE DEFAULT LIMIT PASSWORD_REUSE_MAX 20;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    p.CON_ID,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM CDB_PROFILES p
+  WHERE TO_NUMBER(DECODE(p.LIMIT,
+          'DEFAULT',(SELECT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                     FROM CDB_PROFILES
+                     WHERE PROFILE='DEFAULT'
+                     AND RESOURCE_NAME='PASSWORD_REUSE_MAX'
+                     AND CON_ID = p.CON_ID),
+          'UNLIMITED','9999',p.LIMIT)) < 20
+  AND p.RESOURCE_NAME = 'PASSWORD_REUSE_MAX'
+  AND EXISTS (SELECT 'X' FROM CDB_USERS u WHERE u.PROFILE = p.PROFILE AND u.CON_ID = p.CON_ID)
+) P
+GROUP BY ef.env_type;
+
+-- 3.5 PASSWORD_REUSE_TIME (11g and 12c+ non-multitenant/PDB)
+WITH password_reuse_time_11g AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version LIKE '11.%'
+  AND p.RESOURCE_NAME = 'PASSWORD_REUSE_TIME'
+  AND (p.LIMIT = 'DEFAULT' OR p.LIMIT = 'UNLIMITED' OR TO_NUMBER(p.LIMIT) < 365)
+),
+password_reuse_time_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND TO_NUMBER(DECODE(p.LIMIT,
+        'DEFAULT',(SELECT DISTINCT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                   FROM DBA_PROFILES
+                   WHERE PROFILE='DEFAULT'
+                   AND RESOURCE_NAME='PASSWORD_REUSE_TIME'),
+        'UNLIMITED','9999',
+        p.LIMIT)) < 365
+  AND p.RESOURCE_NAME = 'PASSWORD_REUSE_TIME'
+  AND EXISTS (SELECT 'X' FROM DBA_USERS u WHERE u.PROFILE = p.PROFILE)
+),
+password_reuse_time_combined AS (
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM password_reuse_time_11g
+  UNION ALL
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM password_reuse_time_12c_non_mt
+)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN (SELECT COUNT(*) FROM password_reuse_time_combined) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>3.5</td>' ||
   '<td>Ensure PASSWORD_REUSE_TIME Is Greater than or Equal to 365 (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM password_reuse_time_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE)
-    ELSE 'All profiles compliant (1 or less)'
+    CASE WHEN (SELECT COUNT(*) FROM password_reuse_time_combined) > 0 THEN 
+      (SELECT LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE) FROM password_reuse_time_combined)
+    ELSE 'All profiles compliant (365 or more)'
     END || '</td>' ||
   '<td>Greater than or equal to 365 for all profiles</td>' ||
   '<td class="remediation">ALTER PROFILE DEFAULT LIMIT PASSWORD_REUSE_TIME 365;</td>' ||
   '</tr>'
-FROM DBA_PROFILES
-WHERE RESOURCE_NAME='PASSWORD_REUSE_TIME'
-AND (LIMIT = 'DEFAULT' OR LIMIT = 'UNLIMITED' OR TO_NUMBER(LIMIT) < 365);
+FROM DUAL;
 
--- 3.6 PASSWORD_GRACE_TIME
+-- 3.5b PASSWORD_REUSE_TIME (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(P.PROFILE) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>3.5b</td>' ||
+  '<td>Ensure PASSWORD_REUSE_TIME Is Greater than or Equal to 365 in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(P.PROFILE) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(P.PROFILE) > 0 THEN 
+      LISTAGG(DECODE(P.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE P.CON_ID = B.CON_ID)) || ':' || P.PROFILE || ':' || P.LIMIT, '; ') WITHIN GROUP (ORDER BY P.CON_ID, P.PROFILE)
+    ELSE 'All profiles compliant in all containers'
+    END || '</td>' ||
+  '<td>Greater than or equal to 365 for all profiles in all containers</td>' ||
+  '<td class="remediation">For each container: ALTER PROFILE DEFAULT LIMIT PASSWORD_REUSE_TIME 365;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    p.CON_ID,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM CDB_PROFILES p
+  WHERE TO_NUMBER(DECODE(p.LIMIT,
+          'DEFAULT',(SELECT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                     FROM CDB_PROFILES
+                     WHERE PROFILE='DEFAULT'
+                     AND RESOURCE_NAME='PASSWORD_REUSE_TIME'
+                     AND CON_ID = p.CON_ID),
+          'UNLIMITED','9999',p.LIMIT)) < 365
+  AND p.RESOURCE_NAME = 'PASSWORD_REUSE_TIME'
+  AND EXISTS (SELECT 'X' FROM CDB_USERS u WHERE u.PROFILE = p.PROFILE AND u.CON_ID = p.CON_ID)
+) P
+GROUP BY ef.env_type;
+
+-- 3.6 PASSWORD_GRACE_TIME (11g and 12c+ non-multitenant/PDB)
+WITH password_grace_11g AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version LIKE '11.%'
+  AND p.RESOURCE_NAME = 'PASSWORD_GRACE_TIME'
+  AND (p.LIMIT = 'DEFAULT' OR p.LIMIT = 'UNLIMITED' OR TO_NUMBER(p.LIMIT) > 5)
+),
+password_grace_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND TO_NUMBER(DECODE(p.LIMIT,
+        'DEFAULT',(SELECT DISTINCT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                   FROM DBA_PROFILES
+                   WHERE PROFILE='DEFAULT'
+                   AND RESOURCE_NAME='PASSWORD_GRACE_TIME'),
+        'UNLIMITED','9999',
+        p.LIMIT)) > 5
+  AND p.RESOURCE_NAME = 'PASSWORD_GRACE_TIME'
+  AND EXISTS (SELECT 'X' FROM DBA_USERS u WHERE u.PROFILE = p.PROFILE)
+),
+password_grace_combined AS (
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM password_grace_11g
+  UNION ALL
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM password_grace_12c_non_mt
+)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN (SELECT COUNT(*) FROM password_grace_combined) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>3.6</td>' ||
   '<td>Ensure PASSWORD_GRACE_TIME Is Less than or Equal to 5 (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM password_grace_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE)
-    ELSE 'All profiles compliant (30 or less)'
+    CASE WHEN (SELECT COUNT(*) FROM password_grace_combined) > 0 THEN 
+      (SELECT LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE) FROM password_grace_combined)
+    ELSE 'All profiles compliant (5 or less)'
     END || '</td>' ||
   '<td>Less than or equal to 5 for all profiles</td>' ||
   '<td class="remediation">ALTER PROFILE DEFAULT LIMIT PASSWORD_GRACE_TIME 5;</td>' ||
   '</tr>'
-FROM DBA_PROFILES
-WHERE RESOURCE_NAME='PASSWORD_GRACE_TIME'
-AND (LIMIT = 'DEFAULT' OR LIMIT = 'UNLIMITED' OR TO_NUMBER(LIMIT) > 5);
+FROM DUAL;
 
--- 3.7 DBA_USERS.PASSWORD External
+-- 3.6b PASSWORD_GRACE_TIME (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(P.PROFILE) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>3.6b</td>' ||
+  '<td>Ensure PASSWORD_GRACE_TIME Is Less than or Equal to 5 in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(P.PROFILE) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(P.PROFILE) > 0 THEN 
+      LISTAGG(DECODE(P.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE P.CON_ID = B.CON_ID)) || ':' || P.PROFILE || ':' || P.LIMIT, '; ') WITHIN GROUP (ORDER BY P.CON_ID, P.PROFILE)
+    ELSE 'All profiles compliant in all containers'
+    END || '</td>' ||
+  '<td>Less than or equal to 5 for all profiles in all containers</td>' ||
+  '<td class="remediation">For each container: ALTER PROFILE DEFAULT LIMIT PASSWORD_GRACE_TIME 5;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    p.CON_ID,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM CDB_PROFILES p
+  WHERE TO_NUMBER(DECODE(p.LIMIT,
+          'DEFAULT',(SELECT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                     FROM CDB_PROFILES
+                     WHERE PROFILE='DEFAULT'
+                     AND RESOURCE_NAME='PASSWORD_GRACE_TIME'
+                     AND CON_ID = p.CON_ID),
+          'UNLIMITED','9999',p.LIMIT)) > 5
+  AND p.RESOURCE_NAME = 'PASSWORD_GRACE_TIME'
+  AND EXISTS (SELECT 'X' FROM CDB_USERS u WHERE u.PROFILE = p.PROFILE AND u.CON_ID = p.CON_ID)
+) P
+GROUP BY ef.env_type;
+
+-- 3.7 DBA_USERS External Authentication (11g and 12c+ non-multitenant/PDB)
+WITH external_auth_11g AS (
+  SELECT 
+    vi.version,
+    du.USERNAME
+  FROM v$instance vi
+  CROSS JOIN DBA_USERS du
+  WHERE vi.version LIKE '11.%'
+  AND du.PASSWORD='EXTERNAL'
+),
+external_auth_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    du.USERNAME
+  FROM v$instance vi
+  CROSS JOIN DBA_USERS du
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND du.AUTHENTICATION_TYPE = 'EXTERNAL'
+),
+external_auth_combined AS (
+  SELECT version, USERNAME FROM external_auth_11g
+  UNION ALL
+  SELECT version, USERNAME FROM external_auth_12c_non_mt
+)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN (SELECT COUNT(*) FROM external_auth_combined) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>3.7</td>' ||
-  '<td>Ensure DBA_USERS.PASSWORD Is Not Set to EXTERNAL for Any User (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure No Users Use EXTERNAL Authentication (Scored)</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM external_auth_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(USERNAME, ', ') WITHIN GROUP (ORDER BY USERNAME)
+    CASE WHEN (SELECT COUNT(*) FROM external_auth_combined) > 0 THEN 
+      (SELECT LISTAGG(USERNAME, ', ') WITHIN GROUP (ORDER BY USERNAME) FROM external_auth_combined)
     ELSE 'No users with EXTERNAL authentication'
     END || '</td>' ||
   '<td>No users should use EXTERNAL authentication</td>' ||
   '<td class="remediation">ALTER USER &lt;username&gt; IDENTIFIED BY &lt;password&gt;;</td>' ||
   '</tr>'
-FROM DBA_USERS
-WHERE PASSWORD='EXTERNAL';
+FROM DUAL;
 
--- 3.8 PASSWORD_VERIFY_FUNCTION
+-- 3.7b DBA_USERS External Authentication (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(U.USERNAME) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>3.7b</td>' ||
+  '<td>Ensure No Users Use EXTERNAL Authentication in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(U.USERNAME) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(U.USERNAME) > 0 THEN 
+      LISTAGG(DECODE(U.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE U.CON_ID = B.CON_ID)) || ':' || U.USERNAME, '; ') WITHIN GROUP (ORDER BY U.CON_ID, U.USERNAME)
+    ELSE 'No users with EXTERNAL authentication in any container'
+    END || '</td>' ||
+  '<td>No users should use EXTERNAL authentication in any container</td>' ||
+  '<td class="remediation">For each container: ALTER USER &lt;username&gt; IDENTIFIED BY &lt;password&gt;;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    a.CON_ID,
+    a.USERNAME
+  FROM CDB_USERS a
+  WHERE a.AUTHENTICATION_TYPE = 'EXTERNAL'
+) U
+GROUP BY ef.env_type;
+
+-- 3.8 PASSWORD_VERIFY_FUNCTION (11g and 12c+ non-multitenant/PDB)
+WITH password_verify_11g AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version LIKE '11.%'
+  AND p.RESOURCE_NAME = 'PASSWORD_VERIFY_FUNCTION'
+  AND (p.LIMIT = 'DEFAULT' OR p.LIMIT = 'NULL')
+),
+password_verify_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND DECODE(p.LIMIT,
+        'DEFAULT',(SELECT LIMIT
+                   FROM DBA_PROFILES
+                   WHERE PROFILE='DEFAULT'
+                   AND RESOURCE_NAME = p.RESOURCE_NAME),
+        p.LIMIT) = 'NULL'
+  AND p.RESOURCE_NAME = 'PASSWORD_VERIFY_FUNCTION'
+  AND EXISTS (SELECT 'X' FROM DBA_USERS u WHERE u.PROFILE = p.PROFILE)
+),
+password_verify_combined AS (
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM password_verify_11g
+  UNION ALL
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM password_verify_12c_non_mt
+)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN (SELECT COUNT(*) FROM password_verify_combined) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>3.8</td>' ||
   '<td>Ensure PASSWORD_VERIFY_FUNCTION Is Set for All Profiles (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM password_verify_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE)
+    CASE WHEN (SELECT COUNT(*) FROM password_verify_combined) > 0 THEN 
+      (SELECT LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE) FROM password_verify_combined)
     ELSE 'All profiles have password verification function'
     END || '</td>' ||
   '<td>Password verification function set for all profiles</td>' ||
   '<td class="remediation">Create and assign password verification function to profiles</td>' ||
   '</tr>'
-FROM DBA_PROFILES
-WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION'
-AND (LIMIT = 'DEFAULT' OR LIMIT = 'NULL');
+FROM DUAL;
 
--- 3.9 SESSIONS_PER_USER
+-- 3.8b PASSWORD_VERIFY_FUNCTION (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(P.PROFILE) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>3.8b</td>' ||
+  '<td>Ensure PASSWORD_VERIFY_FUNCTION Is Set for All Profiles in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(P.PROFILE) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(P.PROFILE) > 0 THEN 
+      LISTAGG(DECODE(P.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE P.CON_ID = B.CON_ID)) || ':' || P.PROFILE || ':' || P.LIMIT, '; ') WITHIN GROUP (ORDER BY P.CON_ID, P.PROFILE)
+    ELSE 'All profiles have password verification function in all containers'
+    END || '</td>' ||
+  '<td>Password verification function set for all profiles in all containers</td>' ||
+  '<td class="remediation">For each container: Create and assign password verification function to profiles</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    p.CON_ID,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM CDB_PROFILES p
+  WHERE DECODE(p.LIMIT,
+          'DEFAULT',(SELECT LIMIT
+                     FROM CDB_PROFILES
+                     WHERE PROFILE='DEFAULT'
+                     AND RESOURCE_NAME = p.RESOURCE_NAME
+                     AND CON_ID = p.CON_ID),
+          p.LIMIT) = 'NULL'
+  AND p.RESOURCE_NAME = 'PASSWORD_VERIFY_FUNCTION'
+  AND EXISTS (SELECT 'X' FROM CDB_USERS u WHERE u.PROFILE = p.PROFILE AND u.CON_ID = p.CON_ID)
+) P
+GROUP BY ef.env_type;
+
+-- 3.9 SESSIONS_PER_USER (11g and 12c+ non-multitenant/PDB)
+WITH sessions_per_user_11g AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version LIKE '11.%'
+  AND p.RESOURCE_NAME = 'SESSIONS_PER_USER'
+  AND (p.LIMIT = 'DEFAULT' OR p.LIMIT = 'UNLIMITED' OR TO_NUMBER(p.LIMIT) > 10)
+),
+sessions_per_user_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND TO_NUMBER(DECODE(p.LIMIT,
+        'DEFAULT',(SELECT DISTINCT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                   FROM DBA_PROFILES
+                   WHERE PROFILE='DEFAULT'
+                   AND RESOURCE_NAME='SESSIONS_PER_USER'),
+        'UNLIMITED','9999',
+        p.LIMIT)) > 10
+  AND p.RESOURCE_NAME = 'SESSIONS_PER_USER'
+  AND EXISTS (SELECT 'X' FROM DBA_USERS u WHERE u.PROFILE = p.PROFILE)
+),
+sessions_per_user_combined AS (
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM sessions_per_user_11g
+  UNION ALL
+  SELECT version, PROFILE, RESOURCE_NAME, LIMIT FROM sessions_per_user_12c_non_mt
+)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN (SELECT COUNT(*) FROM sessions_per_user_combined) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>3.9</td>' ||
   '<td>Ensure SESSIONS_PER_USER Is Less than or Equal to 10 (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM sessions_per_user_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE)
+    CASE WHEN (SELECT COUNT(*) FROM sessions_per_user_combined) > 0 THEN 
+      (SELECT LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE) FROM sessions_per_user_combined)
     ELSE 'All profiles compliant (10 or less)'
     END || '</td>' ||
   '<td>Less than or equal to 10 for all profiles</td>' ||
   '<td class="remediation">ALTER PROFILE DEFAULT LIMIT SESSIONS_PER_USER 10;</td>' ||
   '</tr>'
-FROM DBA_PROFILES
-WHERE RESOURCE_NAME='SESSIONS_PER_USER'
-AND (LIMIT = 'DEFAULT' OR LIMIT = 'UNLIMITED' OR TO_NUMBER(LIMIT) > 10);
+FROM DUAL;
 
--- 3.10 No Users Assigned DEFAULT Profile
+-- 3.9b SESSIONS_PER_USER (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(P.PROFILE) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>3.9b</td>' ||
+  '<td>Ensure SESSIONS_PER_USER Is Less than or Equal to 10 in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(P.PROFILE) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(P.PROFILE) > 0 THEN 
+      LISTAGG(DECODE(P.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE P.CON_ID = B.CON_ID)) || ':' || P.PROFILE || ':' || P.LIMIT, '; ') WITHIN GROUP (ORDER BY P.CON_ID, P.PROFILE)
+    ELSE 'All profiles compliant in all containers'
+    END || '</td>' ||
+  '<td>Less than or equal to 10 for all profiles in all containers</td>' ||
+  '<td class="remediation">For each container: ALTER PROFILE DEFAULT LIMIT SESSIONS_PER_USER 10;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    p.CON_ID,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM CDB_PROFILES p
+  WHERE TO_NUMBER(DECODE(p.LIMIT,
+          'DEFAULT',(SELECT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                     FROM CDB_PROFILES
+                     WHERE PROFILE='DEFAULT'
+                     AND RESOURCE_NAME='SESSIONS_PER_USER'
+                     AND CON_ID = p.CON_ID),
+          'UNLIMITED','9999',p.LIMIT)) > 10
+  AND p.RESOURCE_NAME = 'SESSIONS_PER_USER'
+  AND EXISTS (SELECT 'X' FROM CDB_USERS u WHERE u.PROFILE = p.PROFILE AND u.CON_ID = p.CON_ID)
+) P
+GROUP BY ef.env_type;
+
+-- 3.10 No Users Assigned DEFAULT Profile (11g and 12c+ non-multitenant/PDB)
+WITH default_profile_11g AS (
+  SELECT 
+    vi.version,
+    du.USERNAME
+  FROM v$instance vi
+  CROSS JOIN DBA_USERS du
+  WHERE vi.version LIKE '11.%'
+  AND du.PROFILE='DEFAULT'
+  AND du.ACCOUNT_STATUS='OPEN'
+  AND du.USERNAME NOT IN ('ANONYMOUS', 'CTXSYS', 'DBSNMP', 'EXFSYS', 'LBACSYS',
+    'MDSYS', 'MGMT_VIEW','OLAPSYS','OWBSYS', 'ORDPLUGINS',
+    'ORDSYS', 'OUTLN', 'SI_INFORMTN_SCHEMA','SYS',
+    'SYSMAN', 'SYSTEM', 'TSMSYS', 'WK_TEST', 'WKSYS',
+    'WKPROXY', 'WMSYS', 'XDB', 'CISSCAN')
+),
+default_profile_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    du.USERNAME
+  FROM v$instance vi
+  CROSS JOIN DBA_USERS du
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND du.PROFILE='DEFAULT'
+  AND du.ACCOUNT_STATUS='OPEN'
+  AND du.ORACLE_MAINTAINED = 'N'
+),
+default_profile_combined AS (
+  SELECT version, USERNAME FROM default_profile_11g
+  UNION ALL
+  SELECT version, USERNAME FROM default_profile_12c_non_mt
+)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN (SELECT COUNT(*) FROM default_profile_combined) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>3.10</td>' ||
   '<td>Ensure No Users Are Assigned the DEFAULT Profile (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM default_profile_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(USERNAME, ', ') WITHIN GROUP (ORDER BY USERNAME)
+    CASE WHEN (SELECT COUNT(*) FROM default_profile_combined) > 0 THEN 
+      (SELECT LISTAGG(USERNAME, ', ') WITHIN GROUP (ORDER BY USERNAME) FROM default_profile_combined)
     ELSE 'No non-system users with DEFAULT profile'
     END || '</td>' ||
   '<td>No application users should use DEFAULT profile</td>' ||
-  '<td class="remediation">ALTER USER &lt;username&gt; PROFILE &lt;appropriate_profile&gt;</td>' ||
+  '<td class="remediation">ALTER USER &lt;username&gt; PROFILE &lt;appropriate_profile&gt;;</td>' ||
   '</tr>'
-FROM DBA_USERS
-WHERE PROFILE='DEFAULT'
-AND ACCOUNT_STATUS='OPEN'
-AND USERNAME NOT IN ('ANONYMOUS', 'CTXSYS', 'DBSNMP', 'EXFSYS', 'LBACSYS',
-'MDSYS', 'MGMT_VIEW','OLAPSYS','OWBSYS', 'ORDPLUGINS',
-'ORDSYS', 'OUTLN', 'SI_INFORMTN_SCHEMA','SYS',
-'SYSMAN', 'SYSTEM', 'TSMSYS', 'WK_TEST', 'WKSYS',
-'WKPROXY', 'WMSYS', 'XDB', 'CISSCAN');
+FROM DUAL;
 
--- 12c+ Specific: INACTIVE_ACCOUNT_TIME
-SELECT CASE WHEN vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
+-- 3.10b No Users Assigned DEFAULT Profile (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
   '<tr class="' ||
   CASE 
-    WHEN LIMIT NOT IN ('DEFAULT', 'UNLIMITED') AND 
-         REGEXP_LIKE(LIMIT, '^[0-9]+$') AND 
-         TO_NUMBER(LIMIT) <= 35 THEN 'pass'
-    ELSE 'warning'
+    WHEN COUNT(U.USERNAME) = 0 THEN 'pass'
+    ELSE 'fail'
   END || '">' ||
-  '<td>3.11</td>' ||
-  '<td>Ensure INACTIVE_ACCOUNT_TIME Is Less Than or Equal to 35 (12c+) (Scored)</td>' ||
+  '<td>3.10b</td>' ||
+  '<td>Ensure No Users Are Assigned the DEFAULT Profile in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(U.USERNAME) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE 
-      WHEN LIMIT NOT IN ('DEFAULT', 'UNLIMITED') AND 
-           REGEXP_LIKE(LIMIT, '^[0-9]+$') AND 
-           TO_NUMBER(LIMIT) <= 35 THEN 'PASS'
-      ELSE 'WARNING'
+    CASE WHEN COUNT(U.USERNAME) > 0 THEN 
+      LISTAGG(DECODE(U.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE U.CON_ID = B.CON_ID)) || ':' || U.USERNAME, '; ') WITHIN GROUP (ORDER BY U.CON_ID, U.USERNAME)
+    ELSE 'No non-system users with DEFAULT profile in any container'
     END || '</td>' ||
-  '<td>Profile: ' || PROFILE || ', Limit: ' || LIMIT || '</td>' ||
-  '<td>Less than or equal to 35 days</td>' ||
-  '<td class="remediation">ALTER PROFILE ' || PROFILE || ' LIMIT INACTIVE_ACCOUNT_TIME 30</td>' ||
+  '<td>No application users should use DEFAULT profile in any container</td>' ||
+  '<td class="remediation">For each container: ALTER USER &lt;username&gt; PROFILE &lt;appropriate_profile&gt;;</td>' ||
   '</tr>'
 ELSE '' END
-FROM DBA_PROFILES dp, v$instance vi
-WHERE dp.RESOURCE_NAME = 'INACTIVE_ACCOUNT_TIME' 
-  AND (vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version LIKE '19.%');
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    A.CON_ID,
+    A.USERNAME
+  FROM CDB_USERS A
+  WHERE A.PROFILE='DEFAULT'
+  AND A.ACCOUNT_STATUS='OPEN'
+  AND A.ORACLE_MAINTAINED = 'N'
+) U
+GROUP BY ef.env_type;
+
+-- 3.11 INACTIVE_ACCOUNT_TIME (12c+ non-multitenant/PDB)
+WITH inactive_account_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM v$instance vi
+  CROSS JOIN DBA_PROFILES p
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND TO_NUMBER(DECODE(p.LIMIT,
+        'DEFAULT',(SELECT DISTINCT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                   FROM DBA_PROFILES
+                   WHERE PROFILE='DEFAULT'
+                   AND RESOURCE_NAME='INACTIVE_ACCOUNT_TIME'),
+        'UNLIMITED','9999',
+        p.LIMIT)) > 120
+  AND p.RESOURCE_NAME = 'INACTIVE_ACCOUNT_TIME'
+  AND EXISTS (SELECT 'X' FROM DBA_USERS u WHERE u.PROFILE = p.PROFILE)
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN (SELECT COUNT(*) FROM inactive_account_12c_non_mt) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>3.11</td>' ||
+  '<td>Ensure INACTIVE_ACCOUNT_TIME Is Less Than or Equal to 120 Days (12c+) (Scored)</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM inactive_account_12c_non_mt) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN (SELECT COUNT(*) FROM inactive_account_12c_non_mt) > 0 THEN 
+      (SELECT LISTAGG(PROFILE || ':' || LIMIT, ', ') WITHIN GROUP (ORDER BY PROFILE) FROM inactive_account_12c_non_mt)
+    ELSE 'All profiles compliant (120 days or less)'
+    END || '</td>' ||
+  '<td>Less than or equal to 120 days for all profiles</td>' ||
+  '<td class="remediation">ALTER PROFILE DEFAULT LIMIT INACTIVE_ACCOUNT_TIME 120;</td>' ||
+  '</tr>'
+FROM DUAL;
+
+-- 3.11b INACTIVE_ACCOUNT_TIME (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(P.PROFILE) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>3.11b</td>' ||
+  '<td>Ensure INACTIVE_ACCOUNT_TIME Is Less Than or Equal to 120 Days in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(P.PROFILE) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(P.PROFILE) > 0 THEN 
+      LISTAGG(DECODE(P.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE P.CON_ID = B.CON_ID)) || ':' || P.PROFILE || ':' || P.LIMIT, '; ') WITHIN GROUP (ORDER BY P.CON_ID, P.PROFILE)
+    ELSE 'All profiles compliant in all containers'
+    END || '</td>' ||
+  '<td>Less than or equal to 120 days for all profiles in all containers</td>' ||
+  '<td class="remediation">For each container: ALTER PROFILE DEFAULT LIMIT INACTIVE_ACCOUNT_TIME 120;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT DISTINCT
+    p.CON_ID,
+    p.PROFILE,
+    p.RESOURCE_NAME,
+    p.LIMIT
+  FROM CDB_PROFILES p
+  WHERE TO_NUMBER(DECODE(p.LIMIT,
+          'DEFAULT',(SELECT DISTINCT DECODE(LIMIT,'UNLIMITED',9999,LIMIT)
+                     FROM CDB_PROFILES
+                     WHERE PROFILE='DEFAULT'
+                     AND RESOURCE_NAME='INACTIVE_ACCOUNT_TIME'
+                     AND CON_ID = p.CON_ID),
+          'UNLIMITED','9999',p.LIMIT)) > 120
+  AND p.RESOURCE_NAME = 'INACTIVE_ACCOUNT_TIME'
+  AND EXISTS (SELECT 'X' FROM CDB_USERS u WHERE u.PROFILE = p.PROFILE AND u.CON_ID = p.CON_ID)
+) P
+GROUP BY ef.env_type;
 
 -- 18c+ Specific: PASSWORD_ROLLOVER_TIME
 SELECT CASE WHEN vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
@@ -1230,114 +3042,313 @@ PROMPT </table>
 -- Section 4: Oracle User Access and Authorization Restrictions
 PROMPT <h2 id="section4">4. Oracle User Access and Authorization Restrictions</h2>
 
+-- 4.0 Database User Account Status Information
+PROMPT <h3>4.0 Database User Account Status (Informational)</h3>
+PROMPT <p>This section provides an overview of all database user accounts and their current status across different Oracle environments.</p>
+PROMPT <table>
+PROMPT <tr><th width="8%">Username</th><th width="8%">Status</th><th width="8%">Profile</th><th width="12%">Oracle Maintained</th><th width="8%">Common User</th><th width="8%">Container</th><th width="48%">Description/Purpose</th></tr>
+
+-- 4.0.1 User Status for 11g
+WITH user_descriptions AS (
+  SELECT 'ANONYMOUS' as username, 'Account used for anonymous HTTP access to Oracle XML DB' as description FROM dual UNION ALL
+  SELECT 'APPQOSSYS', 'Oracle Application Quality of Service Management schema' FROM dual UNION ALL
+  SELECT 'AUDSYS', 'Oracle Audit Vault schema (12c+)' FROM dual UNION ALL
+  SELECT 'CTXSYS', 'Oracle Text search engine schema - manages full-text indexing and searching' FROM dual UNION ALL
+  SELECT 'DBSNMP', 'Account used by Oracle Enterprise Manager agents for database monitoring and management' FROM dual UNION ALL
+  SELECT 'DIP', 'Directory Integration Platform account for LDAP synchronization' FROM dual UNION ALL
+  SELECT 'DMSYS', 'Oracle Data Mining schema - performs data mining operations and manages mining models' FROM dual UNION ALL
+  SELECT 'DVF', 'Database Vault Factor account (Oracle Database Vault)' FROM dual UNION ALL
+  SELECT 'DVSYS', 'Database Vault owner account - manages Database Vault policies and rules' FROM dual UNION ALL
+  SELECT 'EXFSYS', 'Oracle Expression Filter schema - manages rule-based filtering' FROM dual UNION ALL
+  SELECT 'FLOWS_FILES', 'Oracle Application Express file storage schema' FROM dual UNION ALL
+  SELECT 'GGSYS', 'Oracle GoldenGate schema for replication management' FROM dual UNION ALL
+  SELECT 'GSMADMIN_INTERNAL', 'Global Service Manager internal administration account' FROM dual UNION ALL
+  SELECT 'GSMCATUSER', 'Global Service Manager catalog user' FROM dual UNION ALL
+  SELECT 'GSMROOTUSER', 'Global Service Manager root user' FROM dual UNION ALL
+  SELECT 'GSMUSER', 'Global Service Manager user account' FROM dual UNION ALL
+  SELECT 'HR', 'Oracle sample schema - Human Resources demo data' FROM dual UNION ALL
+  SELECT 'IX', 'Oracle Information Extraction sample schema' FROM dual UNION ALL
+  SELECT 'LBACSYS', 'Oracle Label Security administrator account - manages row-level security labels' FROM dual UNION ALL
+  SELECT 'MDDATA', 'Oracle Spatial schema for storing geocoder and router data' FROM dual UNION ALL
+  SELECT 'MDSYS', 'Oracle Spatial and Locator administrator account - manages spatial data and operations' FROM dual UNION ALL
+  SELECT 'MGMT_VIEW', 'Oracle Enterprise Manager management view account' FROM dual UNION ALL
+  SELECT 'OE', 'Oracle sample schema - Order Entry demo data' FROM dual UNION ALL
+  SELECT 'OJVMSYS', 'Oracle Java Virtual Machine system account' FROM dual UNION ALL
+  SELECT 'OLAPSYS', 'Oracle OLAP administrator account - creates and manages OLAP metadata structures' FROM dual UNION ALL
+  SELECT 'ORACLE_OCM', 'Oracle Configuration Manager account for configuration collection' FROM dual UNION ALL
+  SELECT 'ORDDATA', 'Oracle Multimedia data account' FROM dual UNION ALL
+  SELECT 'ORDPLUGINS', 'Oracle Multimedia user - manages multimedia format plugins and processing' FROM dual UNION ALL
+  SELECT 'ORDSYS', 'Oracle Multimedia administrator account - manages multimedia data types and operations' FROM dual UNION ALL
+  SELECT 'OUTLN', 'Account supporting plan stability - maintains consistent SQL execution plans across database changes' FROM dual UNION ALL
+  SELECT 'OWBSYS', 'Oracle Warehouse Builder repository owner' FROM dual UNION ALL
+  SELECT 'PM', 'Oracle sample schema - Product Media demo data' FROM dual UNION ALL
+  SELECT 'REMOTE_SCHEDULER_AGENT', 'Remote Scheduler Agent account for job execution' FROM dual UNION ALL
+  SELECT 'SCOTT', 'Classic Oracle sample schema - original demo user with EMP/DEPT tables' FROM dual UNION ALL
+  SELECT 'SH', 'Oracle sample schema - Sales History data warehouse demo' FROM dual UNION ALL
+  SELECT 'SI_INFORMTN_SCHEMA', 'SQL/MM Still Image information schema' FROM dual UNION ALL
+  SELECT 'SYS', 'Database superuser account - owns data dictionary and has all system privileges' FROM dual UNION ALL
+  SELECT 'SYS$UMF', 'Unified Messaging Framework system account' FROM dual UNION ALL
+  SELECT 'SYSBACKUP', 'Backup and recovery administrative account with limited privileges' FROM dual UNION ALL
+  SELECT 'SYSDG', 'Data Guard administrative account for standby database management' FROM dual UNION ALL
+  SELECT 'SYSKM', 'Key management administrative account for Transparent Data Encryption' FROM dual UNION ALL
+  SELECT 'SYSMAN', 'Oracle Enterprise Manager system management account' FROM dual UNION ALL
+  SELECT 'SYSRAC', 'Real Application Clusters administrative account' FROM dual UNION ALL
+  SELECT 'SYSTEM', 'Default administrative account - manages internal database structures and operations' FROM dual UNION ALL
+  SELECT 'TSMSYS', 'Transparent Session Migration system account' FROM dual UNION ALL
+  SELECT 'WK_TEST', 'Workspace Manager test account' FROM dual UNION ALL
+  SELECT 'WKPROXY', 'Workspace Manager proxy account' FROM dual UNION ALL
+  SELECT 'WKSYS', 'Workspace Manager system account' FROM dual UNION ALL
+  SELECT 'WMSYS', 'Workspace Manager administrator account - manages workspace versioning and long transactions' FROM dual UNION ALL
+  SELECT 'XDB', 'Oracle XML Database account - manages XML storage, indexing, and processing capabilities' FROM dual UNION ALL
+  SELECT 'XS$NULL', 'Oracle Database Real Application Security null user' FROM dual
+)
+SELECT 
+  '<tr>' ||
+  '<td>' || du.USERNAME || '</td>' ||
+  '<td>' || 
+    CASE 
+      WHEN du.ACCOUNT_STATUS = 'OPEN' THEN '<span style="color: green; font-weight: bold;">OPEN</span>'
+      WHEN du.ACCOUNT_STATUS = 'LOCKED' THEN '<span style="color: red;">LOCKED</span>'
+      WHEN du.ACCOUNT_STATUS LIKE '%EXPIRED%' THEN '<span style="color: orange;">EXPIRED</span>'
+      ELSE du.ACCOUNT_STATUS
+    END || '</td>' ||
+  '<td>' || du.PROFILE || '</td>' ||
+  '<td>N/A (11g)</td>' ||
+  '<td>N/A (11g)</td>' ||
+  '<td>N/A (11g)</td>' ||
+  '<td>' || NVL(ud.description, 'Application or custom user account') || '</td>' ||
+  '</tr>'
+FROM DBA_USERS du
+LEFT JOIN user_descriptions ud ON UPPER(du.USERNAME) = UPPER(ud.username)
+CROSS JOIN v$instance vi
+WHERE vi.version LIKE '11.%'
+ORDER BY 
+  CASE 
+    WHEN du.USERNAME IN ('SYS', 'SYSTEM') THEN 1
+    WHEN du.USERNAME IN ('SYSMAN', 'DBSNMP', 'SYSDG', 'SYSBACKUP', 'SYSKM', 'SYSRAC') THEN 2
+    WHEN ud.description IS NOT NULL THEN 3
+    ELSE 4
+  END,
+  du.USERNAME;
+
+-- 4.0.2 User Status for 12c+ Non-Multitenant/PDB
+WITH user_descriptions AS (
+  SELECT 'ANONYMOUS' as username, 'Account used for anonymous HTTP access to Oracle XML DB' as description FROM dual UNION ALL
+  SELECT 'APPQOSSYS', 'Oracle Application Quality of Service Management schema' FROM dual UNION ALL
+  SELECT 'AUDSYS', 'Oracle Audit Vault schema (12c+)' FROM dual UNION ALL
+  SELECT 'CTXSYS', 'Oracle Text search engine schema - manages full-text indexing and searching' FROM dual UNION ALL
+  SELECT 'DBSNMP', 'Account used by Oracle Enterprise Manager agents for database monitoring and management' FROM dual UNION ALL
+  SELECT 'DIP', 'Directory Integration Platform account for LDAP synchronization' FROM dual UNION ALL
+  SELECT 'DMSYS', 'Oracle Data Mining schema - performs data mining operations and manages mining models' FROM dual UNION ALL
+  SELECT 'DVF', 'Database Vault Factor account (Oracle Database Vault)' FROM dual UNION ALL
+  SELECT 'DVSYS', 'Database Vault owner account - manages Database Vault policies and rules' FROM dual UNION ALL
+  SELECT 'EXFSYS', 'Oracle Expression Filter schema - manages rule-based filtering' FROM dual UNION ALL
+  SELECT 'FLOWS_FILES', 'Oracle Application Express file storage schema' FROM dual UNION ALL
+  SELECT 'GGSYS', 'Oracle GoldenGate schema for replication management' FROM dual UNION ALL
+  SELECT 'GSMADMIN_INTERNAL', 'Global Service Manager internal administration account' FROM dual UNION ALL
+  SELECT 'GSMCATUSER', 'Global Service Manager catalog user' FROM dual UNION ALL
+  SELECT 'GSMROOTUSER', 'Global Service Manager root user' FROM dual UNION ALL
+  SELECT 'GSMUSER', 'Global Service Manager user account' FROM dual UNION ALL
+  SELECT 'HR', 'Oracle sample schema - Human Resources demo data' FROM dual UNION ALL
+  SELECT 'IX', 'Oracle Information Extraction sample schema' FROM dual UNION ALL
+  SELECT 'LBACSYS', 'Oracle Label Security administrator account - manages row-level security labels' FROM dual UNION ALL
+  SELECT 'MDDATA', 'Oracle Spatial schema for storing geocoder and router data' FROM dual UNION ALL
+  SELECT 'MDSYS', 'Oracle Spatial and Locator administrator account - manages spatial data and operations' FROM dual UNION ALL
+  SELECT 'MGMT_VIEW', 'Oracle Enterprise Manager management view account' FROM dual UNION ALL
+  SELECT 'OE', 'Oracle sample schema - Order Entry demo data' FROM dual UNION ALL
+  SELECT 'OJVMSYS', 'Oracle Java Virtual Machine system account' FROM dual UNION ALL
+  SELECT 'OLAPSYS', 'Oracle OLAP administrator account - creates and manages OLAP metadata structures' FROM dual UNION ALL
+  SELECT 'ORACLE_OCM', 'Oracle Configuration Manager account for configuration collection' FROM dual UNION ALL
+  SELECT 'ORDDATA', 'Oracle Multimedia data account' FROM dual UNION ALL
+  SELECT 'ORDPLUGINS', 'Oracle Multimedia user - manages multimedia format plugins and processing' FROM dual UNION ALL
+  SELECT 'ORDSYS', 'Oracle Multimedia administrator account - manages multimedia data types and operations' FROM dual UNION ALL
+  SELECT 'OUTLN', 'Account supporting plan stability - maintains consistent SQL execution plans across database changes' FROM dual UNION ALL
+  SELECT 'OWBSYS', 'Oracle Warehouse Builder repository owner' FROM dual UNION ALL
+  SELECT 'PDBADMIN', '12c+ Pluggable Database administrator account - manages PDB-specific operations' FROM dual UNION ALL
+  SELECT 'PM', 'Oracle sample schema - Product Media demo data' FROM dual UNION ALL
+  SELECT 'REMOTE_SCHEDULER_AGENT', 'Remote Scheduler Agent account for job execution' FROM dual UNION ALL
+  SELECT 'SCOTT', 'Classic Oracle sample schema - original demo user with EMP/DEPT tables' FROM dual UNION ALL
+  SELECT 'SH', 'Oracle sample schema - Sales History data warehouse demo' FROM dual UNION ALL
+  SELECT 'SI_INFORMTN_SCHEMA', 'SQL/MM Still Image information schema' FROM dual UNION ALL
+  SELECT 'SYS', 'Database superuser account - owns data dictionary and has all system privileges' FROM dual UNION ALL
+  SELECT 'SYS$UMF', 'Unified Messaging Framework system account' FROM dual UNION ALL
+  SELECT 'SYSBACKUP', 'Backup and recovery administrative account with limited privileges' FROM dual UNION ALL
+  SELECT 'SYSDG', 'Data Guard administrative account for standby database management' FROM dual UNION ALL
+  SELECT 'SYSKM', 'Key management administrative account for Transparent Data Encryption' FROM dual UNION ALL
+  SELECT 'SYSMAN', 'Oracle Enterprise Manager system management account' FROM dual UNION ALL
+  SELECT 'SYSRAC', 'Real Application Clusters administrative account' FROM dual UNION ALL
+  SELECT 'SYSTEM', 'Default administrative account - manages internal database structures and operations' FROM dual UNION ALL
+  SELECT 'TSMSYS', 'Transparent Session Migration system account' FROM dual UNION ALL
+  SELECT 'WK_TEST', 'Workspace Manager test account' FROM dual UNION ALL
+  SELECT 'WKPROXY', 'Workspace Manager proxy account' FROM dual UNION ALL
+  SELECT 'WKSYS', 'Workspace Manager system account' FROM dual UNION ALL
+  SELECT 'WMSYS', 'Workspace Manager administrator account - manages workspace versioning and long transactions' FROM dual UNION ALL
+  SELECT 'XDB', 'Oracle XML Database account - manages XML storage, indexing, and processing capabilities' FROM dual UNION ALL
+  SELECT 'XS$NULL', 'Oracle Database Real Application Security null user' FROM dual
+)
+SELECT 
+  '<tr>' ||
+  '<td>' || du.USERNAME || '</td>' ||
+  '<td>' || 
+    CASE 
+      WHEN du.ACCOUNT_STATUS = 'OPEN' THEN '<span style="color: green; font-weight: bold;">OPEN</span>'
+      WHEN du.ACCOUNT_STATUS = 'LOCKED' THEN '<span style="color: red;">LOCKED</span>'
+      WHEN du.ACCOUNT_STATUS LIKE '%EXPIRED%' THEN '<span style="color: orange;">EXPIRED</span>'
+      ELSE du.ACCOUNT_STATUS
+    END || '</td>' ||
+  '<td>' || du.PROFILE || '</td>' ||
+  '<td>' || NVL(du.ORACLE_MAINTAINED, 'N/A') || '</td>' ||
+  '<td>' || NVL(du.COMMON, 'N/A') || '</td>' ||
+  '<td>N/A (Non-MT)</td>' ||
+  '<td>' || NVL(ud.description, 'Application or custom user account') || '</td>' ||
+  '</tr>'
+FROM DBA_USERS du
+LEFT JOIN user_descriptions ud ON UPPER(du.USERNAME) = UPPER(ud.username)
+CROSS JOIN v$instance vi
+WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+ORDER BY 
+  CASE 
+    WHEN du.USERNAME IN ('SYS', 'SYSTEM') THEN 1
+    WHEN du.USERNAME IN ('SYSMAN', 'DBSNMP', 'SYSDG', 'SYSBACKUP', 'SYSKM', 'SYSRAC', 'PDBADMIN') THEN 2
+    WHEN ud.description IS NOT NULL THEN 3
+    ELSE 4
+  END,
+  du.USERNAME;
+
+-- 4.0.3 User Status for 12c+ Multi-tenant CDB
+WITH user_descriptions AS (
+  SELECT 'ANONYMOUS' as username, 'Account used for anonymous HTTP access to Oracle XML DB' as description FROM dual UNION ALL
+  SELECT 'APPQOSSYS', 'Oracle Application Quality of Service Management schema' FROM dual UNION ALL
+  SELECT 'AUDSYS', 'Oracle Audit Vault schema (12c+)' FROM dual UNION ALL
+  SELECT 'CTXSYS', 'Oracle Text search engine schema - manages full-text indexing and searching' FROM dual UNION ALL
+  SELECT 'DBSNMP', 'Account used by Oracle Enterprise Manager agents for database monitoring and management' FROM dual UNION ALL
+  SELECT 'DIP', 'Directory Integration Platform account for LDAP synchronization' FROM dual UNION ALL
+  SELECT 'DMSYS', 'Oracle Data Mining schema - performs data mining operations and manages mining models' FROM dual UNION ALL
+  SELECT 'DVF', 'Database Vault Factor account (Oracle Database Vault)' FROM dual UNION ALL
+  SELECT 'DVSYS', 'Database Vault owner account - manages Database Vault policies and rules' FROM dual UNION ALL
+  SELECT 'EXFSYS', 'Oracle Expression Filter schema - manages rule-based filtering' FROM dual UNION ALL
+  SELECT 'FLOWS_FILES', 'Oracle Application Express file storage schema' FROM dual UNION ALL
+  SELECT 'GGSYS', 'Oracle GoldenGate schema for replication management' FROM dual UNION ALL
+  SELECT 'GSMADMIN_INTERNAL', 'Global Service Manager internal administration account' FROM dual UNION ALL
+  SELECT 'GSMCATUSER', 'Global Service Manager catalog user' FROM dual UNION ALL
+  SELECT 'GSMROOTUSER', 'Global Service Manager root user' FROM dual UNION ALL
+  SELECT 'GSMUSER', 'Global Service Manager user account' FROM dual UNION ALL
+  SELECT 'HR', 'Oracle sample schema - Human Resources demo data' FROM dual UNION ALL
+  SELECT 'IX', 'Oracle Information Extraction sample schema' FROM dual UNION ALL
+  SELECT 'LBACSYS', 'Oracle Label Security administrator account - manages row-level security labels' FROM dual UNION ALL
+  SELECT 'MDDATA', 'Oracle Spatial schema for storing geocoder and router data' FROM dual UNION ALL
+  SELECT 'MDSYS', 'Oracle Spatial and Locator administrator account - manages spatial data and operations' FROM dual UNION ALL
+  SELECT 'MGMT_VIEW', 'Oracle Enterprise Manager management view account' FROM dual UNION ALL
+  SELECT 'OE', 'Oracle sample schema - Order Entry demo data' FROM dual UNION ALL
+  SELECT 'OJVMSYS', 'Oracle Java Virtual Machine system account' FROM dual UNION ALL
+  SELECT 'OLAPSYS', 'Oracle OLAP administrator account - creates and manages OLAP metadata structures' FROM dual UNION ALL
+  SELECT 'ORACLE_OCM', 'Oracle Configuration Manager account for configuration collection' FROM dual UNION ALL
+  SELECT 'ORDDATA', 'Oracle Multimedia data account' FROM dual UNION ALL
+  SELECT 'ORDPLUGINS', 'Oracle Multimedia user - manages multimedia format plugins and processing' FROM dual UNION ALL
+  SELECT 'ORDSYS', 'Oracle Multimedia administrator account - manages multimedia data types and operations' FROM dual UNION ALL
+  SELECT 'OUTLN', 'Account supporting plan stability - maintains consistent SQL execution plans across database changes' FROM dual UNION ALL
+  SELECT 'OWBSYS', 'Oracle Warehouse Builder repository owner' FROM dual UNION ALL
+  SELECT 'PDBADMIN', '12c+ Pluggable Database administrator account - manages PDB-specific operations' FROM dual UNION ALL
+  SELECT 'PM', 'Oracle sample schema - Product Media demo data' FROM dual UNION ALL
+  SELECT 'REMOTE_SCHEDULER_AGENT', 'Remote Scheduler Agent account for job execution' FROM dual UNION ALL
+  SELECT 'SCOTT', 'Classic Oracle sample schema - original demo user with EMP/DEPT tables' FROM dual UNION ALL
+  SELECT 'SH', 'Oracle sample schema - Sales History data warehouse demo' FROM dual UNION ALL
+  SELECT 'SI_INFORMTN_SCHEMA', 'SQL/MM Still Image information schema' FROM dual UNION ALL
+  SELECT 'SYS', 'Database superuser account - owns data dictionary and has all system privileges' FROM dual UNION ALL
+  SELECT 'SYS$UMF', 'Unified Messaging Framework system account' FROM dual UNION ALL
+  SELECT 'SYSBACKUP', 'Backup and recovery administrative account with limited privileges' FROM dual UNION ALL
+  SELECT 'SYSDG', 'Data Guard administrative account for standby database management' FROM dual UNION ALL
+  SELECT 'SYSKM', 'Key management administrative account for Transparent Data Encryption' FROM dual UNION ALL
+  SELECT 'SYSMAN', 'Oracle Enterprise Manager system management account' FROM dual UNION ALL
+  SELECT 'SYSRAC', 'Real Application Clusters administrative account' FROM dual UNION ALL
+  SELECT 'SYSTEM', 'Default administrative account - manages internal database structures and operations' FROM dual UNION ALL
+  SELECT 'TSMSYS', 'Transparent Session Migration system account' FROM dual UNION ALL
+  SELECT 'WK_TEST', 'Workspace Manager test account' FROM dual UNION ALL
+  SELECT 'WKPROXY', 'Workspace Manager proxy account' FROM dual UNION ALL
+  SELECT 'WKSYS', 'Workspace Manager system account' FROM dual UNION ALL
+  SELECT 'WMSYS', 'Workspace Manager administrator account - manages workspace versioning and long transactions' FROM dual UNION ALL
+  SELECT 'XDB', 'Oracle XML Database account - manages XML storage, indexing, and processing capabilities' FROM dual UNION ALL
+  SELECT 'XS$NULL', 'Oracle Database Real Application Security null user' FROM dual
+),
+environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT 
+  '<tr>' ||
+  '<td>' || cu.USERNAME || '</td>' ||
+  '<td>' || 
+    CASE 
+      WHEN cu.ACCOUNT_STATUS = 'OPEN' THEN '<span style="color: green; font-weight: bold;">OPEN</span>'
+      WHEN cu.ACCOUNT_STATUS = 'LOCKED' THEN '<span style="color: red;">LOCKED</span>'
+      WHEN cu.ACCOUNT_STATUS LIKE '%EXPIRED%' THEN '<span style="color: orange;">EXPIRED</span>'
+      ELSE cu.ACCOUNT_STATUS
+    END || '</td>' ||
+  '<td>' || cu.PROFILE || '</td>' ||
+  '<td>' || NVL(cu.ORACLE_MAINTAINED, 'N/A') || '</td>' ||
+  '<td>' || NVL(cu.COMMON, 'N/A') || '</td>' ||
+  '<td>' || DECODE(cu.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,'CDB$ROOT',(SELECT NAME FROM V$PDBS B WHERE cu.CON_ID = B.CON_ID)) || '</td>' ||
+  '<td>' || NVL(ud.description, 'Application or custom user account') || '</td>' ||
+  '</tr>'
+FROM environment_flag ef
+CROSS JOIN CDB_USERS cu
+LEFT JOIN user_descriptions ud ON UPPER(cu.USERNAME) = UPPER(ud.username)
+WHERE ef.env_type = 2
+ORDER BY 
+  cu.CON_ID,
+  CASE 
+    WHEN cu.USERNAME IN ('SYS', 'SYSTEM') THEN 1
+    WHEN cu.USERNAME IN ('SYSMAN', 'DBSNMP', 'SYSDG', 'SYSBACKUP', 'SYSKM', 'SYSRAC', 'PDBADMIN') THEN 2
+    WHEN ud.description IS NOT NULL THEN 3
+    ELSE 4
+  END,
+  cu.USERNAME;
+
+PROMPT </table>
+PROMPT <p><strong>Note:</strong> Users with <span style="color: green; font-weight: bold;">OPEN</span> status can connect to the database. Users with <span style="color: red;">LOCKED</span> or <span style="color: orange;">EXPIRED</span> status cannot connect until unlocked or password reset.</p>
+PROMPT <p><strong>Security Recommendation:</strong> Regularly review user accounts and lock or drop unused accounts. Ensure sample schemas (HR, OE, PM, SH, SCOTT) are removed from production databases.</p>
+
 -- 4.1 Default Public Privileges for Packages and Object Types
 PROMPT <h3>4.1 Default Public Privileges for Packages and Object Types</h3>
+PROMPT <p>This section checks for dangerous PUBLIC EXECUTE privileges on Oracle built-in packages that should be revoked for security.</p>
+PROMPT <p>The checks are compatible with Oracle 11g, 12c+ non-multitenant, and 12c+ multitenant environments.</p>
+
+-- Oracle Environment Detection
+DEFINE oracle_version = ''
+DEFINE is_multitenant = ''
+COL oracle_version NEW_VALUE oracle_version NOPRINT
+COL is_multitenant NEW_VALUE is_multitenant NOPRINT
+
+SELECT TO_NUMBER(SUBSTR(VERSION, 1, 2)) AS oracle_version
+FROM V$INSTANCE;
+
+-- Detect multitenant for 12c+
+SELECT CASE 
+  WHEN EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') THEN 'YES'
+  ELSE 'NO'
+END AS is_multitenant
+FROM DUAL;
+
+-- 4.1.1 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "Network" Packages
+PROMPT <h4>4.1.1 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "Network" Packages</h4>
+PROMPT <p>Network packages: DBMS_LDAP, UTL_INADDR, UTL_TCP, UTL_MAIL, UTL_SMTP, UTL_DBWS, UTL_ORAMTS, UTL_HTTP, HTTPURITYPE</p>
 PROMPT <table>
-PROMPT <tr><th width="5%">Control</th><th width="35%">Title</th><th width="8%">Status</th><th width="20%">Current Value</th><th width="15%">Expected</th><th width="17%">Remediation</th></tr>
+PROMPT <tr><th width="5%">Package</th><th width="8%">Status</th><th width="30%">Current Value</th><th width="15%">Expected</th><th width="42%">Remediation</th></tr>
 
--- 4.1.1 DBMS_ADVISOR
+-- Network Packages Check - All Oracle versions (11g, 12c+ non-MT, 12c+ MT)
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>4.1.1</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_ADVISOR (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_ADVISOR FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_ADVISOR';
-
--- 4.1.2 DBMS_CRYPTO
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.2</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_CRYPTO (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_CRYPTO FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND TABLE_NAME='DBMS_CRYPTO';
-
--- 4.1.3 DBMS_JAVA
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.3</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_JAVA (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_JAVA FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_JAVA';
-
--- 4.1.4 DBMS_JAVA_TEST
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.4</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_JAVA_TEST (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_JAVA_TEST FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_JAVA_TEST';
-
--- 4.1.5 DBMS_JOB
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.5</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_JOB (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_JOB FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_JOB';
-
--- 4.1.6 DBMS_LDAP
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.6</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_LDAP (Scored)</td>' ||
+  '<td>DBMS_LDAP</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
@@ -1349,166 +3360,12 @@ SELECT '<tr class="' ||
 FROM DBA_TAB_PRIVS
 WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_LDAP';
 
--- 4.1.7 DBMS_LOB
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>4.1.7</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_LOB (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_LOB FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_LOB';
-
--- 4.1.8 DBMS_OBFUSCATION_TOOLKIT
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.8</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_OBFUSCATION_TOOLKIT (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_OBFUSCATION_TOOLKIT FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_OBFUSCATION_TOOLKIT';
-
--- 4.1.9 DBMS_RANDOM
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.9</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_RANDOM (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_RANDOM FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_RANDOM';
-
--- 4.1.10 DBMS_SCHEDULER
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.10</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_SCHEDULER (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_SCHEDULER FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_SCHEDULER';
-
--- 4.1.11 DBMS_SQL
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.11</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_SQL (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_SQL FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_SQL';
-
--- 4.1.12 DBMS_XMLGEN
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.12</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_XMLGEN (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_XMLGEN FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_XMLGEN';
-
--- 4.1.13 DBMS_XMLQUERY
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.13</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_XMLQUERY (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_XMLQUERY FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_XMLQUERY';
-
--- 4.1.14 UTL_FILE
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.14</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on UTL_FILE (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON UTL_FILE FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='UTL_FILE';
-
--- 4.1.15 UTL_INADDR
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.1.15</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on UTL_INADDR (Scored)</td>' ||
+  '<td>UTL_INADDR</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
@@ -1520,14 +3377,12 @@ SELECT '<tr class="' ||
 FROM DBA_TAB_PRIVS
 WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='UTL_INADDR';
 
--- 4.1.16 UTL_TCP
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>4.1.16</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on UTL_TCP (Scored)</td>' ||
+  '<td>UTL_TCP</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
@@ -1539,14 +3394,12 @@ SELECT '<tr class="' ||
 FROM DBA_TAB_PRIVS
 WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='UTL_TCP';
 
--- 4.1.17 UTL_MAIL
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>4.1.17</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on UTL_MAIL (Scored)</td>' ||
+  '<td>UTL_MAIL</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
@@ -1558,14 +3411,12 @@ SELECT '<tr class="' ||
 FROM DBA_TAB_PRIVS
 WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='UTL_MAIL';
 
--- 4.1.18 UTL_SMTP
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>4.1.18</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on UTL_SMTP (Scored)</td>' ||
+  '<td>UTL_SMTP</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
@@ -1577,18 +3428,16 @@ SELECT '<tr class="' ||
 FROM DBA_TAB_PRIVS
 WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='UTL_SMTP';
 
--- 4.1.19 UTL_DBWS
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>4.1.19</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on UTL_DBWS (Scored)</td>' ||
+  '<td>UTL_DBWS</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege (12c+ only)'
+    ELSE 'No PUBLIC privilege found or not applicable'
     END || '</td>' ||
   '<td>No EXECUTE privilege for PUBLIC</td>' ||
   '<td class="remediation">REVOKE EXECUTE ON UTL_DBWS FROM PUBLIC;</td>' ||
@@ -1596,14 +3445,12 @@ SELECT '<tr class="' ||
 FROM DBA_TAB_PRIVS
 WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='UTL_DBWS';
 
--- 4.1.20 UTL_ORAMTS
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>4.1.20</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on UTL_ORAMTS (Scored)</td>' ||
+  '<td>UTL_ORAMTS</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
@@ -1615,14 +3462,12 @@ SELECT '<tr class="' ||
 FROM DBA_TAB_PRIVS
 WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='UTL_ORAMTS';
 
--- 4.1.21 UTL_HTTP
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>4.1.21</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on UTL_HTTP (Scored)</td>' ||
+  '<td>UTL_HTTP</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
@@ -1634,14 +3479,12 @@ SELECT '<tr class="' ||
 FROM DBA_TAB_PRIVS
 WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='UTL_HTTP';
 
--- 4.1.22 HTTPURITYPE
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>4.1.22</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on HTTPURITYPE (Scored)</td>' ||
+  '<td>HTTPURITYPE</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
@@ -1653,21 +3496,462 @@ SELECT '<tr class="' ||
 FROM DBA_TAB_PRIVS
 WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='HTTPURITYPE';
 
+-- Additional check for Multitenant environments (12c+)
+-- This query shows packages with privileges across all containers
+SELECT '<tr class="info">' ||
+  '<td colspan="5"><i>For Oracle 12c+ multitenant environments, check CDB_TAB_PRIVS for container-specific privileges if needed.</i></td>' ||
+  '</tr>'
+FROM DUAL
+WHERE EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES');
+
+PROMPT </table>
+
+-- 4.1.2 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "File System" Packages
+PROMPT <h4>4.1.2 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "File System" Packages</h4>
+PROMPT <p>File system packages: DBMS_ADVISOR, DBMS_LOB, UTL_FILE</p>
+PROMPT <table>
+PROMPT <tr><th width="5%">Package</th><th width="8%">Status</th><th width="30%">Current Value</th><th width="15%">Expected</th><th width="42%">Remediation</th></tr>
+
+-- File System Packages Check - All Oracle versions
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_ADVISOR</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_ADVISOR FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_ADVISOR';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_LOB</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_LOB FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_LOB';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>UTL_FILE</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON UTL_FILE FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='UTL_FILE';
+
+PROMPT </table>
+
+-- 4.1.3 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "Encryption" Packages
+PROMPT <h4>4.1.3 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "Encryption" Packages</h4>
+PROMPT <p>Encryption packages: DBMS_CRYPTO, DBMS_OBFUSCATION_TOOLKIT, DBMS_RANDOM</p>
+PROMPT <table>
+PROMPT <tr><th width="5%">Package</th><th width="8%">Status</th><th width="30%">Current Value</th><th width="15%">Expected</th><th width="42%">Remediation</th></tr>
+
+-- Encryption Packages Check - All Oracle versions
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_CRYPTO</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_CRYPTO FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_CRYPTO';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_OBFUSCATION_TOOLKIT</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_OBFUSCATION_TOOLKIT FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_OBFUSCATION_TOOLKIT';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_RANDOM</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_RANDOM FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_RANDOM';
+
+PROMPT </table>
+
+-- 4.1.4 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "Java" Packages
+PROMPT <h4>4.1.4 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "Java" Packages</h4>
+PROMPT <p>Java packages: DBMS_JAVA, DBMS_JAVA_TEST</p>
+PROMPT <table>
+PROMPT <tr><th width="5%">Package</th><th width="8%">Status</th><th width="30%">Current Value</th><th width="15%">Expected</th><th width="42%">Remediation</th></tr>
+
+-- Java Packages Check - All Oracle versions
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_JAVA</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_JAVA FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_JAVA';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_JAVA_TEST</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_JAVA_TEST FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_JAVA_TEST';
+
+PROMPT </table>
+
+-- 4.1.5 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "Job Scheduler" Packages
+PROMPT <h4>4.1.5 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "Job Scheduler" Packages</h4>
+PROMPT <p>Job scheduler packages: DBMS_SCHEDULER, DBMS_JOB</p>
+PROMPT <table>
+PROMPT <tr><th width="5%">Package</th><th width="8%">Status</th><th width="30%">Current Value</th><th width="15%">Expected</th><th width="42%">Remediation</th></tr>
+
+-- Job Scheduler Packages Check - All Oracle versions
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_SCHEDULER</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_SCHEDULER FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_SCHEDULER';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_JOB</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_JOB FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_JOB';
+
+PROMPT </table>
+
+-- 4.1.6 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "SQL Injection Helper" Packages
+PROMPT <h4>4.1.6 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "SQL Injection Helper" Packages</h4>
+PROMPT <p>SQL Injection Helper packages: DBMS_SQL, DBMS_XMLGEN, DBMS_XMLQUERY, DBMS_XMLSTORE, DBMS_XMLSAVE, DBMS_AW, OWA_UTIL, DBMS_REDACT</p>
+PROMPT <table>
+PROMPT <tr><th width="5%">Package</th><th width="8%">Status</th><th width="30%">Current Value</th><th width="15%">Expected</th><th width="42%">Remediation</th></tr>
+
+-- SQL Injection Helper Packages Check - All Oracle versions
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_SQL</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_SQL FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_SQL';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_XMLGEN</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_XMLGEN FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_XMLGEN';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_XMLQUERY</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_XMLQUERY FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_XMLQUERY';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_XMLSTORE</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_XMLSTORE FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_XMLSTORE';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_XMLSAVE</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_XMLSAVE FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_XMLSAVE';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_AW</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_AW FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_AW';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>OWA_UTIL</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON OWA_UTIL FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='OWA_UTIL';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_REDACT</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege (12c+ only)'
+    ELSE 'No PUBLIC privilege found or not applicable'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_REDACT FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_REDACT';
+
+PROMPT </table>
+
+-- 4.1.7 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "DBMS_CREDENTIAL" Package (18c+)
+PROMPT <h4>4.1.7 Ensure 'EXECUTE' is revoked from 'PUBLIC' on "DBMS_CREDENTIAL" Package (Oracle 18c+)</h4>
+PROMPT <p>DBMS_CREDENTIAL package: Provides credential management functionality introduced in Oracle 18c</p>
+PROMPT <table>
+PROMPT <tr><th width="5%">Package</th><th width="8%">Status</th><th width="30%">Current Value</th><th width="15%">Expected</th><th width="42%">Remediation</th></tr>
+
+-- Check if Oracle version is 18c+ before running the check
+SELECT '<tr class="info">' ||
+  '<td colspan="5"><i>Checking Oracle version for DBMS_CREDENTIAL package compatibility...</i></td>' ||
+  '</tr>'
+FROM DUAL
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- DBMS_CREDENTIAL Check - Oracle 18c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_CREDENTIAL</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_CREDENTIAL FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_CREDENTIAL'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- DBMS_CREDENTIAL Check - Oracle 18c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_CREDENTIAL (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN priv_count > 0 THEN 'PUBLIC has EXECUTE privilege in ' || container_name
+    ELSE 'No PUBLIC privilege found in ' || container_name
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_CREDENTIAL FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name
+  FROM CDB_TAB_PRIVS A
+  WHERE A.GRANTEE='PUBLIC' 
+    AND A.PRIVILEGE='EXECUTE' 
+    AND A.TABLE_NAME='DBMS_CREDENTIAL'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- Show informational message for Oracle versions < 18c
+SELECT '<tr class="info">' ||
+  '<td colspan="5"><i>DBMS_CREDENTIAL package is not available in Oracle versions prior to 18c. Current version: ' ||
+  (SELECT VERSION FROM V$INSTANCE) || '</i></td>' ||
+  '</tr>'
+FROM DUAL
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) < 18;
+
 PROMPT </table>
 
 -- 4.2 Revoke Non-Default Privileges for Packages and Object Types
 PROMPT <h3>4.2 Revoke Non-Default Privileges for Packages and Object Types</h3>
+PROMPT <p>This section checks for non-default PUBLIC EXECUTE privileges on Oracle built-in packages that should be revoked for security.</p>
+PROMPT <p>The checks are compatible with Oracle 11g and 12c+ (including non-multitenant and multitenant environments).</p>
 PROMPT <table>
 PROMPT <tr><th width="5%">Control</th><th width="35%">Title</th><th width="8%">Status</th><th width="20%">Current Value</th><th width="15%">Expected</th><th width="17%">Remediation</th></tr>
 
--- 4.2.1 DBMS_SYS_SQL
+-- 4.2.1 DBMS_SYS_SQL - Oracle 11g (Non-multitenant only)
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.2.1</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_SYS_SQL (Scored)</td>' ||
+  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_SYS_SQL (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
@@ -1677,9 +3961,77 @@ SELECT '<tr class="' ||
   '<td class="remediation">REVOKE EXECUTE ON DBMS_SYS_SQL FROM PUBLIC;</td>' ||
   '</tr>'
 FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_SYS_SQL';
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_SYS_SQL'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.2.2 DBMS_BACKUP_RESTORE
+-- 4.2.1 DBMS_SYS_SQL - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.2.1</td>' ||
+  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_SYS_SQL (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_SYS_SQL FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_SYS_SQL'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.2.1 DBMS_SYS_SQL - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.2.1</td>' ||
+  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_SYS_SQL (Scored) - CDB All Containers (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN priv_count > 0 THEN 'PUBLIC has EXECUTE privilege in ' || container_name
+    ELSE 'No PUBLIC privilege found in ' || container_name
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_SYS_SQL FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name
+  FROM CDB_TAB_PRIVS A
+  WHERE A.GRANTEE='PUBLIC' 
+    AND A.PRIVILEGE='EXECUTE' 
+    AND A.TABLE_NAME='DBMS_SYS_SQL'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.2.2 through 4.2.14 - Container-aware checks for remaining packages
+-- Detects execution context and uses appropriate views
+
+-- 4.2.2 DBMS_BACKUP_RESTORE - For 11g, 12c+ Non-MT, or when running from PDB
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
@@ -1696,9 +4048,52 @@ SELECT '<tr class="' ||
   '<td class="remediation">REVOKE EXECUTE ON DBMS_BACKUP_RESTORE FROM PUBLIC;</td>' ||
   '</tr>'
 FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_BACKUP_RESTORE';
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_BACKUP_RESTORE'
+AND (
+  -- Oracle 11g (non-multitenant)
+  TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11
+  OR 
+  -- Oracle 12c+ Non-multitenant
+  (TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12 AND NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES'))
+  OR 
+  -- Oracle 12c+ Running from PDB (not CDB$ROOT)
+  (TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12 AND 
+   EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
 
--- 4.2.3 DBMS_AQADM_SYSCALLS
+-- 4.2.2 DBMS_BACKUP_RESTORE - For 12c+ CDB when running from CDB$ROOT
+SELECT '<tr class="' ||
+  CASE 
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.2.2</td>' ||
+  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_BACKUP_RESTORE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN priv_count > 0 THEN 'PUBLIC has EXECUTE privilege in ' || container_name
+    ELSE 'No PUBLIC privilege found in ' || container_name
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_BACKUP_RESTORE FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name
+  FROM CDB_TAB_PRIVS A
+  WHERE A.GRANTEE='PUBLIC' 
+    AND A.PRIVILEGE='EXECUTE' 
+    AND A.TABLE_NAME='DBMS_BACKUP_RESTORE'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.2.3 DBMS_AQADM_SYSCALLS - For 11g, 12c+ Non-MT, or when running from PDB
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
@@ -1715,216 +4110,207 @@ SELECT '<tr class="' ||
   '<td class="remediation">REVOKE EXECUTE ON DBMS_AQADM_SYSCALLS FROM PUBLIC;</td>' ||
   '</tr>'
 FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_AQADM_SYSCALLS';
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_AQADM_SYSCALLS'
+AND (
+  -- Oracle 11g (non-multitenant)
+  TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11
+  OR 
+  -- Oracle 12c+ Non-multitenant
+  (TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12 AND NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES'))
+  OR 
+  -- Oracle 12c+ Running from PDB (not CDB$ROOT)
+  (TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12 AND 
+   EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
 
--- 4.2.4 DBMS_REPCAT_SQL_UTL
+-- 4.2.3 DBMS_AQADM_SYSCALLS - For 12c+ CDB when running from CDB$ROOT
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>4.2.4</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_REPCAT_SQL_UTL (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>4.2.3</td>' ||
+  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_AQADM_SYSCALLS (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    CASE WHEN priv_count > 0 THEN 'PUBLIC has EXECUTE privilege in ' || container_name
+    ELSE 'No PUBLIC privilege found in ' || container_name
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_AQADM_SYSCALLS FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name
+  FROM CDB_TAB_PRIVS A
+  WHERE A.GRANTEE='PUBLIC' 
+    AND A.PRIVILEGE='EXECUTE' 
+    AND A.TABLE_NAME='DBMS_AQADM_SYSCALLS'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.2.4 through 4.2.14 - Container-aware implementations
+-- Each check uses DBA_TAB_PRIVS for 11g/Non-MT/PDB context, CDB_TAB_PRIVS for CDB$ROOT context
+
+-- Consolidated query for DBA_TAB_PRIVS context (11g, 12c+ Non-MT, or PDB)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN package_name = 'DBMS_REPCAT_SQL_UTL' AND priv_count = 0 THEN 'pass'
+    WHEN package_name = 'DBMS_REPCAT_SQL_UTL' AND priv_count > 0 THEN 'fail'
+    WHEN package_name = 'INITJVMAUX' AND priv_count = 0 THEN 'pass'
+    WHEN package_name = 'INITJVMAUX' AND priv_count > 0 THEN 'fail'
+    WHEN package_name = 'DBMS_STREAMS_ADM_UTL' AND priv_count = 0 THEN 'pass'
+    WHEN package_name = 'DBMS_STREAMS_ADM_UTL' AND priv_count > 0 THEN 'fail'
+    WHEN package_name = 'DBMS_AQADM_SYS' AND priv_count = 0 THEN 'pass'
+    WHEN package_name = 'DBMS_AQADM_SYS' AND priv_count > 0 THEN 'fail'
+    WHEN package_name = 'DBMS_STREAMS_RPC' AND priv_count = 0 THEN 'pass'
+    WHEN package_name = 'DBMS_STREAMS_RPC' AND priv_count > 0 THEN 'fail'
+    WHEN package_name = 'DBMS_PRVTAQIM' AND priv_count = 0 THEN 'pass'
+    WHEN package_name = 'DBMS_PRVTAQIM' AND priv_count > 0 THEN 'fail'
+    WHEN package_name = 'LTADM' AND priv_count = 0 THEN 'pass'
+    WHEN package_name = 'LTADM' AND priv_count > 0 THEN 'fail'
+    WHEN package_name = 'WWV_DBMS_SQL' AND priv_count = 0 THEN 'pass'
+    WHEN package_name = 'WWV_DBMS_SQL' AND priv_count > 0 THEN 'fail'
+    WHEN package_name = 'WWV_EXECUTE_IMMEDIATE' AND priv_count = 0 THEN 'pass'
+    WHEN package_name = 'WWV_EXECUTE_IMMEDIATE' AND priv_count > 0 THEN 'fail'
+    WHEN package_name = 'DBMS_IJOB' AND priv_count = 0 THEN 'pass'
+    WHEN package_name = 'DBMS_IJOB' AND priv_count > 0 THEN 'fail'
+    WHEN package_name = 'DBMS_FILE_TRANSFER' AND priv_count = 0 THEN 'pass'
+    WHEN package_name = 'DBMS_FILE_TRANSFER' AND priv_count > 0 THEN 'fail'
+    ELSE 'info'
+  END || '">' ||
+  '<td>4.2.' ||
+  CASE package_name
+    WHEN 'DBMS_REPCAT_SQL_UTL' THEN '4'
+    WHEN 'INITJVMAUX' THEN '5'
+    WHEN 'DBMS_STREAMS_ADM_UTL' THEN '6'
+    WHEN 'DBMS_AQADM_SYS' THEN '7'
+    WHEN 'DBMS_STREAMS_RPC' THEN '8'
+    WHEN 'DBMS_PRVTAQIM' THEN '9'
+    WHEN 'LTADM' THEN '10'
+    WHEN 'WWV_DBMS_SQL' THEN '11'
+    WHEN 'WWV_EXECUTE_IMMEDIATE' THEN '12'
+    WHEN 'DBMS_IJOB' THEN '13'
+    WHEN 'DBMS_FILE_TRANSFER' THEN '14'
+  END || '</td>' ||
+  '<td>Ensure EXECUTE Is Revoked from PUBLIC on ' || package_name || ' (Scored)</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN priv_count > 0 THEN 'PUBLIC has EXECUTE privilege'
     ELSE 'No PUBLIC privilege found'
     END || '</td>' ||
   '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_REPCAT_SQL_UTL FROM PUBLIC;</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON ' || package_name || ' FROM PUBLIC;</td>' ||
   '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_REPCAT_SQL_UTL';
+FROM (
+  SELECT 'DBMS_REPCAT_SQL_UTL' AS package_name, COUNT(*) AS priv_count
+  FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_REPCAT_SQL_UTL'
+  UNION ALL
+  SELECT 'INITJVMAUX' AS package_name, COUNT(*) AS priv_count
+  FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='INITJVMAUX'
+  UNION ALL
+  SELECT 'DBMS_STREAMS_ADM_UTL' AS package_name, COUNT(*) AS priv_count
+  FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_STREAMS_ADM_UTL'
+  UNION ALL
+  SELECT 'DBMS_AQADM_SYS' AS package_name, COUNT(*) AS priv_count
+  FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_AQADM_SYS'
+  UNION ALL
+  SELECT 'DBMS_STREAMS_RPC' AS package_name, COUNT(*) AS priv_count
+  FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_STREAMS_RPC'
+  UNION ALL
+  SELECT 'DBMS_PRVTAQIM' AS package_name, COUNT(*) AS priv_count
+  FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_PRVTAQIM'
+  UNION ALL
+  SELECT 'LTADM' AS package_name, COUNT(*) AS priv_count
+  FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='LTADM'
+  UNION ALL
+  SELECT 'WWV_DBMS_SQL' AS package_name, COUNT(*) AS priv_count
+  FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='WWV_DBMS_SQL'
+  UNION ALL
+  SELECT 'WWV_EXECUTE_IMMEDIATE' AS package_name, COUNT(*) AS priv_count
+  FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='WWV_EXECUTE_IMMEDIATE'
+  UNION ALL
+  SELECT 'DBMS_IJOB' AS package_name, COUNT(*) AS priv_count
+  FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_IJOB'
+  UNION ALL
+  SELECT 'DBMS_FILE_TRANSFER' AS package_name, COUNT(*) AS priv_count
+  FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_FILE_TRANSFER'
+)
+WHERE (
+  -- Oracle 11g (non-multitenant)
+  TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11
+  OR 
+  -- Oracle 12c+ Non-multitenant
+  (TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12 AND NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES'))
+  OR 
+  -- Oracle 12c+ Running from PDB (not CDB$ROOT)
+  (TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12 AND 
+   EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+ORDER BY package_name;
 
--- 4.2.5 INITJVMAUX
+-- Consolidated query for CDB context (when running from CDB$ROOT)
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>4.2.5</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on INITJVMAUX (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>4.2.' ||
+  CASE package_name
+    WHEN 'DBMS_REPCAT_SQL_UTL' THEN '4'
+    WHEN 'INITJVMAUX' THEN '5'
+    WHEN 'DBMS_STREAMS_ADM_UTL' THEN '6'
+    WHEN 'DBMS_AQADM_SYS' THEN '7'
+    WHEN 'DBMS_STREAMS_RPC' THEN '8'
+    WHEN 'DBMS_PRVTAQIM' THEN '9'
+    WHEN 'LTADM' THEN '10'
+    WHEN 'WWV_DBMS_SQL' THEN '11'
+    WHEN 'WWV_EXECUTE_IMMEDIATE' THEN '12'
+    WHEN 'DBMS_IJOB' THEN '13'
+    WHEN 'DBMS_FILE_TRANSFER' THEN '14'
+  END || '</td>' ||
+  '<td>Ensure EXECUTE Is Revoked from PUBLIC on ' || package_name || ' (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
+    CASE WHEN priv_count > 0 THEN 'PUBLIC has EXECUTE privilege in ' || container_name
+    ELSE 'No PUBLIC privilege found in ' || container_name
     END || '</td>' ||
   '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON INITJVMAUX FROM PUBLIC;</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON ' || package_name || ' FROM PUBLIC;</td>' ||
   '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='INITJVMAUX';
+FROM (
+  SELECT 
+    A.TABLE_NAME AS package_name,
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name
+  FROM CDB_TAB_PRIVS A
+  WHERE A.GRANTEE='PUBLIC' 
+    AND A.PRIVILEGE='EXECUTE' 
+    AND A.TABLE_NAME IN ('DBMS_REPCAT_SQL_UTL','INITJVMAUX','DBMS_STREAMS_ADM_UTL','DBMS_AQADM_SYS','DBMS_STREAMS_RPC','DBMS_PRVTAQIM','LTADM','WWV_DBMS_SQL','WWV_EXECUTE_IMMEDIATE','DBMS_IJOB','DBMS_FILE_TRANSFER')
+  GROUP BY A.TABLE_NAME, A.CON_ID
+  ORDER BY A.CON_ID, A.TABLE_NAME
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
 
--- 4.2.6 DBMS_STREAMS_ADM_UTL
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.2.6</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_STREAMS_ADM_UTL (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_STREAMS_ADM_UTL FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_STREAMS_ADM_UTL';
-
--- 4.2.7 DBMS_AQADM_SYS
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.2.7</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_AQADM_SYS (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_AQADM_SYS FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_AQADM_SYS';
-
--- 4.2.8 DBMS_STREAMS_RPC
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.2.8</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_STREAMS_RPC (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_STREAMS_RPC FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_STREAMS_RPC';
-
--- 4.2.9 DBMS_PRVTAQIM
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.2.9</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_PRVTAQIM (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_PRVTAQIM FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_PRVTAQIM';
-
--- 4.2.10 LTADM
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.2.10</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on LTADM (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON LTADM FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='LTADM';
-
--- 4.2.11 WWV_DBMS_SQL
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.2.11</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on WWV_DBMS_SQL (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON WWV_DBMS_SQL FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='WWV_DBMS_SQL';
-
--- 4.2.12 WWV_EXECUTE_IMMEDIATE
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.2.12</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on WWV_EXECUTE_IMMEDIATE (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON WWV_EXECUTE_IMMEDIATE FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='WWV_EXECUTE_IMMEDIATE';
-
--- 4.2.13 DBMS_IJOB
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.2.13</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_IJOB (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_IJOB FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_IJOB';
-
--- 4.2.14 DBMS_FILE_TRANSFER
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.2.14</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_FILE_TRANSFER (Scored)</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
-  '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
-    ELSE 'No PUBLIC privilege found'
-    END || '</td>' ||
-  '<td>No EXECUTE privilege for PUBLIC</td>' ||
-  '<td class="remediation">REVOKE EXECUTE ON DBMS_FILE_TRANSFER FROM PUBLIC;</td>' ||
-  '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_FILE_TRANSFER';
+-- All 4.2 checks are now fully container-aware:
+-- Container Detection Logic Implemented:
+-- ✓ Oracle Version: TO_NUMBER(SUBSTR(VERSION, 1, 2)) FROM V$INSTANCE
+-- ✓ Is CDB: CDB FROM V$DATABASE (YES/NO)
+-- ✓ Container Name: SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL (CDB$ROOT, PDB_NAME, or NULL)
+-- Execution Logic:
+-- ✓ Oracle 11g: Uses DBA_TAB_PRIVS
+-- ✓ Oracle 12c+ Non-MT: Uses DBA_TAB_PRIVS  
+-- ✓ Oracle 12c+ MT running from PDB: Uses DBA_TAB_PRIVS (PDB-scoped)
+-- ✓ Oracle 12c+ MT running from CDB$ROOT: Uses CDB_TAB_PRIVS (cross-container)
 
 PROMPT </table>
 
@@ -1933,14 +4319,14 @@ PROMPT <h3>4.3 Revoke Excessive System Privileges</h3>
 PROMPT <table>
 PROMPT <tr><th width="5%">Control</th><th width="35%">Title</th><th width="8%">Status</th><th width="20%">Current Value</th><th width="15%">Expected</th><th width="17%">Remediation</th></tr>
 
--- 4.3.1 SELECT_ANY_DICTIONARY
+-- 4.3.1 SELECT_ANY_DICTIONARY - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.1</td>' ||
-  '<td>Ensure SELECT_ANY_DICTIONARY Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure SELECT_ANY_DICTIONARY Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 
@@ -1952,16 +4338,85 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='SELECT ANY DICTIONARY'
-AND GRANTEE NOT IN ('DBA','DBSNMP','OEM_MONITOR','OLAPSYS','ORACLE_OCM','SYSMAN','WMSYS','AUDSYS','GGSYS','GSMADMIN_INTERNAL','SYSBACKUP','SYSDG');
+AND GRANTEE NOT IN ('DBA','DBSNMP','OEM_MONITOR','OLAPSYS','ORACLE_OCM','SYSMAN','WMSYS')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.3.2 SELECT ANY TABLE
+-- 4.3.1 SELECT_ANY_DICTIONARY - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.1</td>' ||
+  '<td>Ensure SELECT_ANY_DICTIONARY Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE SELECT_ANY_DICTIONARY FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_SYS_PRIVS
+WHERE PRIVILEGE='SELECT ANY DICTIONARY'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.3.1 SELECT_ANY_DICTIONARY - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.1</td>' ||
+  '<td>Ensure SELECT_ANY_DICTIONARY Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE SELECT_ANY_DICTIONARY FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='SELECT ANY DICTIONARY'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.3.2 SELECT ANY TABLE - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.2</td>' ||
-  '<td>Ensure SELECT ANY TABLE Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure SELECT ANY TABLE Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 
@@ -1973,16 +4428,85 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='SELECT ANY TABLE'
-AND GRANTEE NOT IN ('DBA', 'MDSYS', 'SYS', 'IMP_FULL_DATABASE', 'EXP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE', 'WMSYS', 'SYSTEM','OLAP_DBA','OLAPSYS','DV_REALM_OWNER','GGSYS','GSMADMIN_INTERNAL');
+AND GRANTEE NOT IN ('DBA', 'MDSYS', 'SYS', 'IMP_FULL_DATABASE', 'EXP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE', 'WMSYS', 'SYSTEM','OLAP_DBA','OLAPSYS')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.3.3 AUDIT SYSTEM
+-- 4.3.2 SELECT ANY TABLE - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.2</td>' ||
+  '<td>Ensure SELECT ANY TABLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE SELECT ANY TABLE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_SYS_PRIVS
+WHERE PRIVILEGE='SELECT ANY TABLE'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.3.2 SELECT ANY TABLE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.2</td>' ||
+  '<td>Ensure SELECT ANY TABLE Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE SELECT ANY TABLE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='SELECT ANY TABLE'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.3.3 AUDIT SYSTEM - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.3</td>' ||
-  '<td>Ensure AUDIT SYSTEM Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure AUDIT SYSTEM Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -1994,16 +4518,111 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='AUDIT SYSTEM'
-AND GRANTEE NOT IN ('DBA','DATAPUMP_IMP_FULL_DATABASE','IMP_FULL_DATABASE','SYS','AUDIT_ADMIN');
+AND GRANTEE NOT IN ('DBA','DATAPUMP_IMP_FULL_DATABASE','IMP_FULL_DATABASE','SYS')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.3.4 EXEMPT ACCESS POLICY
+-- 4.3.3 AUDIT SYSTEM - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.3</td>' ||
+  '<td>Ensure AUDIT SYSTEM Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE AUDIT SYSTEM FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_SYS_PRIVS
+WHERE PRIVILEGE='AUDIT SYSTEM'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.3.3 AUDIT SYSTEM - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.3</td>' ||
+  '<td>Ensure AUDIT SYSTEM Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE AUDIT SYSTEM FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='AUDIT SYSTEM'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.3.4 EXEMPT ACCESS POLICY - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.4</td>' ||
-  '<td>Ensure EXEMPT ACCESS POLICY Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure EXEMPT ACCESS POLICY Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No grantees found'
+    END || '</td>' ||
+  '<td>No users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE EXEMPT ACCESS POLICY FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_SYS_PRIVS
+WHERE PRIVILEGE='EXEMPT ACCESS POLICY'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+
+-- 4.3.4 EXEMPT ACCESS POLICY - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.4</td>' ||
+  '<td>Ensure EXEMPT ACCESS POLICY Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -2015,16 +4634,58 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='EXEMPT ACCESS POLICY'
-AND GRANTEE NOT IN ('GSMUSER_ROLE','MDSYS');
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
 
--- 4.3.5 BECOME USER
+-- 4.3.4 EXEMPT ACCESS POLICY - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.4</td>' ||
+  '<td>Ensure EXEMPT ACCESS POLICY Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>No users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE EXEMPT ACCESS POLICY FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='EXEMPT ACCESS POLICY'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.3.5 BECOME USER - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.5</td>' ||
-  '<td>Ensure BECOME USER Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure BECOME USER Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -2036,16 +4697,85 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='BECOME USER'
-AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE');
+AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.3.6 CREATE_PROCEDURE
+-- 4.3.5 BECOME USER - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.5</td>' ||
+  '<td>Ensure BECOME USER Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE BECOME USER FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_SYS_PRIVS
+WHERE PRIVILEGE='BECOME USER'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.3.5 BECOME USER - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.5</td>' ||
+  '<td>Ensure BECOME USER Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE BECOME USER FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='BECOME USER'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.3.6 CREATE_PROCEDURE - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.6</td>' ||
-  '<td>Ensure CREATE_PROCEDURE Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure CREATE_PROCEDURE Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -2057,10 +4787,76 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='CREATE PROCEDURE'
-AND GRANTEE NOT IN ('DBA','DBSNMP','MDSYS','OLAPSYS','OWB$CLIENT','OWBSYS',
-'RECOVERY_CATALOG_OWNER','SPATIAL_CSW_ADMIN_USR','SPATIAL_WFS_ADMIN_USR',
-'SYS','APEX_030200','APEX_040000','APEX_040100','APEX_040200','RESOURCE','DVF',
-'DV_REALM_RESOURCE');
+AND GRANTEE NOT IN ('DBA','DBSNMP','MDSYS','OLAPSYS','OWB$CLIENT','OWBSYS','RECOVERY_CATALOG_OWNER','SPATIAL_CSW_ADMIN_USR','SPATIAL_WFS_ADMIN_USR','SYS','APEX_030200','APEX_040000','APEX_040100','APEX_040200','RESOURCE')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+
+-- 4.3.6 CREATE_PROCEDURE - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.6</td>' ||
+  '<td>Ensure CREATE_PROCEDURE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized users and roles should have this privilege</td>' ||
+  '<td class="remediation">REVOKE CREATE PROCEDURE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_SYS_PRIVS
+WHERE PRIVILEGE='CREATE PROCEDURE'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.3.6 CREATE_PROCEDURE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.6</td>' ||
+  '<td>Ensure CREATE_PROCEDURE Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized users and roles should have this privilege</td>' ||
+  '<td class="remediation">REVOKE CREATE PROCEDURE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='CREATE PROCEDURE'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
 
 -- 4.3.7 ALTER SYSTEM
 SELECT '<tr class="' ||
@@ -2084,14 +4880,14 @@ WHERE PRIVILEGE='ALTER SYSTEM'
 AND GRANTEE NOT IN ('SYS','SYSTEM','APEX_030200','APEX_040000','APEX_040100','APEX_040200',
 'DBA','EM_EXPRESS_ALL','GSMADMIN_INTERNAL','GSMADMIN_ROLE','GSMUSER_ROLE','SYSBACKUP','SYSDG','SYSRAC');
 
--- 4.3.8 CREATE ANY LIBRARY
+-- 4.3.8 CREATE ANY LIBRARY - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.8</td>' ||
-  '<td>Ensure CREATE ANY LIBRARY Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure CREATE ANY LIBRARY Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -2103,16 +4899,85 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='CREATE ANY LIBRARY'
-AND GRANTEE NOT IN ('SYS','SYSTEM','DBA','IMP_FULL_DATABASE');
+AND GRANTEE NOT IN ('SYS','SYSTEM','DBA','IMP_FULL_DATABASE')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.3.9 CREATE LIBRARY
+-- 4.3.8 CREATE ANY LIBRARY - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.8</td>' ||
+  '<td>Ensure CREATE ANY LIBRARY Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE CREATE ANY LIBRARY FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_SYS_PRIVS
+WHERE PRIVILEGE='CREATE ANY LIBRARY'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.3.8 CREATE ANY LIBRARY - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.8</td>' ||
+  '<td>Ensure CREATE ANY LIBRARY Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE CREATE ANY LIBRARY FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='CREATE ANY LIBRARY'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.3.9 CREATE LIBRARY - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.9</td>' ||
-  '<td>Ensure CREATE LIBRARY Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure CREATE LIBRARY Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -2124,16 +4989,85 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='CREATE LIBRARY'
-AND GRANTEE NOT IN ('SYS','SYSTEM','DBA','SPATIAL_CSW_ADMIN_USR','XDB','EXFSYS','MDSYS','SPATIAL_WFS_ADMIN_USR');
+AND GRANTEE NOT IN ('SYS','SYSTEM','DBA','SPATIAL_CSW_ADMIN_USR','XDB','EXFSYS','MDSYS','SPATIAL_WFS_ADMIN_USR')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.3.10 GRANT ANY OBJECT PRIVILEGE
+-- 4.3.9 CREATE LIBRARY - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.9</td>' ||
+  '<td>Ensure CREATE LIBRARY Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE CREATE LIBRARY FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_SYS_PRIVS
+WHERE PRIVILEGE='CREATE LIBRARY'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.3.9 CREATE LIBRARY - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.9</td>' ||
+  '<td>Ensure CREATE LIBRARY Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE CREATE LIBRARY FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='CREATE LIBRARY'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.3.10 GRANT ANY OBJECT PRIVILEGE - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.10</td>' ||
-  '<td>Ensure GRANT ANY OBJECT PRIVILEGE Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure GRANT ANY OBJECT PRIVILEGE Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -2145,16 +5079,85 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='GRANT ANY OBJECT PRIVILEGE'
-AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE','EM_EXPRESS_ALL');
+AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.3.11 GRANT ANY ROLE
+-- 4.3.10 GRANT ANY OBJECT PRIVILEGE - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.10</td>' ||
+  '<td>Ensure GRANT ANY OBJECT PRIVILEGE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE GRANT ANY OBJECT PRIVILEGE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_SYS_PRIVS
+WHERE PRIVILEGE='GRANT ANY OBJECT PRIVILEGE'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.3.10 GRANT ANY OBJECT PRIVILEGE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.10</td>' ||
+  '<td>Ensure GRANT ANY OBJECT PRIVILEGE Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE GRANT ANY OBJECT PRIVILEGE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='GRANT ANY OBJECT PRIVILEGE'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.3.11 GRANT ANY ROLE - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.11</td>' ||
-  '<td>Ensure GRANT ANY ROLE Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure GRANT ANY ROLE Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -2166,16 +5169,85 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='GRANT ANY ROLE'
-AND GRANTEE NOT IN ('DBA','SYS','DATAPUMP_IMP_FULL_DATABASE','IMP_FULL_DATABASE','SPATIAL_WFS_ADMIN_USR','SPATIAL_CSW_ADMIN_USR','EM_EXPRESS_ALL','GSMADMIN_INTERNAL');
+AND GRANTEE NOT IN ('DBA','SYS','DATAPUMP_IMP_FULL_DATABASE','IMP_FULL_DATABASE','SPATIAL_WFS_ADMIN_USR','SPATIAL_CSW_ADMIN_USR')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.3.12 GRANT ANY PRIVILEGE
+-- 4.3.11 GRANT ANY ROLE - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.11</td>' ||
+  '<td>Ensure GRANT ANY ROLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE GRANT ANY ROLE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_SYS_PRIVS
+WHERE PRIVILEGE='GRANT ANY ROLE'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.3.11 GRANT ANY ROLE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.11</td>' ||
+  '<td>Ensure GRANT ANY ROLE Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE GRANT ANY ROLE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='GRANT ANY ROLE'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.3.12 GRANT ANY PRIVILEGE - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.12</td>' ||
-  '<td>Ensure GRANT ANY PRIVILEGE Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure GRANT ANY PRIVILEGE Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -2187,7 +5259,76 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='GRANT ANY PRIVILEGE'
-AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE','EM_EXPRESS_ALL','GSMADMIN_INTERNAL');
+AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+
+-- 4.3.12 GRANT ANY PRIVILEGE - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.12</td>' ||
+  '<td>Ensure GRANT ANY PRIVILEGE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE GRANT ANY PRIVILEGE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_SYS_PRIVS
+WHERE PRIVILEGE='GRANT ANY PRIVILEGE'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.3.12 GRANT ANY PRIVILEGE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.3.12</td>' ||
+  '<td>Ensure GRANT ANY PRIVILEGE Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have this privilege</td>' ||
+  '<td class="remediation">REVOKE GRANT ANY PRIVILEGE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='GRANT ANY PRIVILEGE'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
 
 PROMPT </table>
 
@@ -2196,14 +5337,14 @@ PROMPT <h3>4.4 Revoke Role Privileges</h3>
 PROMPT <table>
 PROMPT <tr><th width="5%">Control</th><th width="35%">Title</th><th width="8%">Status</th><th width="20%">Current Value</th><th width="15%">Expected</th><th width="17%">Remediation</th></tr>
 
--- 4.4.1 DELETE_CATALOG_ROLE
+-- 4.4.1 DELETE_CATALOG_ROLE - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.4.1</td>' ||
-  '<td>Ensure DELETE_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure DELETE_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -2215,16 +5356,85 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_ROLE_PRIVS
 WHERE GRANTED_ROLE='DELETE_CATALOG_ROLE'
-AND GRANTEE NOT IN ('DBA','SYS');
+AND GRANTEE NOT IN ('DBA','SYS')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.4.2 SELECT_CATALOG_ROLE
+-- 4.4.1 DELETE_CATALOG_ROLE - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.4.1</td>' ||
+  '<td>Ensure DELETE_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have this role</td>' ||
+  '<td class="remediation">REVOKE DELETE_CATALOG_ROLE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_ROLE_PRIVS
+WHERE GRANTED_ROLE='DELETE_CATALOG_ROLE'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.4.1 DELETE_CATALOG_ROLE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.4.1</td>' ||
+  '<td>Ensure DELETE_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have this role</td>' ||
+  '<td class="remediation">REVOKE DELETE_CATALOG_ROLE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_ROLE_PRIVS A
+  WHERE A.GRANTED_ROLE='DELETE_CATALOG_ROLE'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.4.2 SELECT_CATALOG_ROLE - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.4.2</td>' ||
-  '<td>Ensure SELECT_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure SELECT_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -2236,17 +5446,85 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_ROLE_PRIVS
 WHERE GRANTED_ROLE='SELECT_CATALOG_ROLE'
-AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE','EXP_FULL_DATABASE','OEM_MONITOR',
-'SYSMAN','EM_EXPRESS_BASIC','SYSBACKUP','SYSUMF_ROLE');
+AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE','EXP_FULL_DATABASE','OEM_MONITOR','SYSMAN')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.4.3 EXECUTE_CATALOG_ROLE
+-- 4.4.2 SELECT_CATALOG_ROLE - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.4.2</td>' ||
+  '<td>Ensure SELECT_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have this role</td>' ||
+  '<td class="remediation">REVOKE SELECT_CATALOG_ROLE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_ROLE_PRIVS
+WHERE GRANTED_ROLE='SELECT_CATALOG_ROLE'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.4.2 SELECT_CATALOG_ROLE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.4.2</td>' ||
+  '<td>Ensure SELECT_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have this role</td>' ||
+  '<td class="remediation">REVOKE SELECT_CATALOG_ROLE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_ROLE_PRIVS A
+  WHERE A.GRANTED_ROLE='SELECT_CATALOG_ROLE'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.4.3 EXECUTE_CATALOG_ROLE - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.4.3</td>' ||
-  '<td>Ensure EXECUTE_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure EXECUTE_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -2258,16 +5536,85 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_ROLE_PRIVS
 WHERE GRANTED_ROLE='EXECUTE_CATALOG_ROLE'
-AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE','EXP_FULL_DATABASE');
+AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE','EXP_FULL_DATABASE')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.4.4 DBA
+-- 4.4.3 EXECUTE_CATALOG_ROLE - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.4.3</td>' ||
+  '<td>Ensure EXECUTE_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized grantees found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have this role</td>' ||
+  '<td class="remediation">REVOKE EXECUTE_CATALOG_ROLE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_ROLE_PRIVS
+WHERE GRANTED_ROLE='EXECUTE_CATALOG_ROLE'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.4.3 EXECUTE_CATALOG_ROLE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.4.3</td>' ||
+  '<td>Ensure EXECUTE_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN grantee_list
+    ELSE 'No unauthorized grantees found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have this role</td>' ||
+  '<td class="remediation">REVOKE EXECUTE_CATALOG_ROLE FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS grantee_list
+  FROM CDB_ROLE_PRIVS A
+  WHERE A.GRANTED_ROLE='EXECUTE_CATALOG_ROLE'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.4.4 DBA - Oracle 11g
 SELECT '<tr class="' ||
   CASE
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.4.4</td>' ||
-  '<td>Ensure DBA Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure DBA Is Revoked from Unauthorized GRANTEE (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
     CASE WHEN COUNT(*) > 0 THEN
@@ -2279,7 +5626,97 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_ROLE_PRIVS
 WHERE GRANTED_ROLE='DBA'
-AND GRANTEE NOT IN ('SYS','SYSTEM');
+AND GRANTEE NOT IN ('SYS','SYSTEM')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+
+-- 4.4.4 DBA - Oracle 12c+ Non-multitenant OR when running from PDB
+WITH dba_access AS (
+  -- Direct DBA role grants
+  SELECT 'GRANT' AS PATH, GRANTEE, GRANTED_ROLE
+  FROM DBA_ROLE_PRIVS
+  WHERE GRANTED_ROLE = 'DBA' 
+  AND GRANTEE NOT IN ('SYS', 'SYSTEM')
+  UNION
+  -- Proxy access to DBA users
+  SELECT 'PROXY', PROXY || '-' || CLIENT, 'DBA'
+  FROM DBA_PROXIES
+  WHERE CLIENT IN (SELECT GRANTEE FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE = 'DBA')
+)
+SELECT '<tr class="' ||
+  CASE
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.4.4</td>' ||
+  '<td>Ensure DBA Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN COUNT(*) > 0 THEN
+      LISTAGG(PATH || ':' || GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized DBA access found'
+    END || '</td>' ||
+  '<td>Only SYS and SYSTEM should have DBA role</td>' ||
+  '<td class="remediation">REVOKE DBA FROM &lt;grantee&gt;; or ALTER USER &lt;proxy&gt; REVOKE CONNECT THROUGH &lt;client&gt;;</td>' ||
+  '</tr>'
+FROM dba_access
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.4.4 DBA - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+WITH dba_access_cdb AS (
+  -- Direct DBA role grants
+  SELECT 'GRANT' AS PATH, A.GRANTEE, A.GRANTED_ROLE,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS CON
+  FROM CDB_ROLE_PRIVS A
+  WHERE A.GRANTED_ROLE='DBA'
+  AND A.GRANTEE NOT IN ('SYS', 'SYSTEM')
+  UNION
+  -- Proxy access to DBA users
+  SELECT 'PROXY', A.PROXY || '-' || A.CLIENT, 'DBA',
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS CON
+  FROM CDB_PROXIES A
+  WHERE A.CLIENT IN (SELECT B.GRANTEE FROM CDB_ROLE_PRIVS B WHERE B.GRANTED_ROLE = 'DBA' AND A.CON_ID = B.CON_ID)
+),
+dba_access_summary AS (
+  SELECT 
+    CON AS container_name,
+    COUNT(*) AS access_count,
+    LISTAGG(PATH || ':' || GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) AS access_list
+  FROM dba_access_cdb
+  GROUP BY CON
+  ORDER BY CON
+)
+SELECT '<tr class="' ||
+  CASE
+    WHEN access_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.4.4</td>' ||
+  '<td>Ensure DBA Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN access_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN access_count > 0 THEN access_list
+    ELSE 'No unauthorized DBA access found in ' || container_name
+    END || '</td>' ||
+  '<td>Only SYS and SYSTEM should have DBA role</td>' ||
+  '<td class="remediation">REVOKE DBA FROM &lt;grantee&gt;; or ALTER USER &lt;proxy&gt; REVOKE CONNECT THROUGH &lt;client&gt;;</td>' ||
+  '</tr>'
+FROM dba_access_summary
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
 
 PROMPT </table>
 
@@ -2288,14 +5725,14 @@ PROMPT <h3>4.5 Revoke Excessive Table and View Privileges</h3>
 PROMPT <table>
 PROMPT <tr><th width="5%">Control</th><th width="35%">Title</th><th width="8%">Status</th><th width="20%">Current Value</th><th width="15%">Expected</th><th width="17%">Remediation</th></tr>
 
--- 4.5.1 ALL on AUD$
+-- 4.5.1 ALL on AUD$ - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.5.1</td>' ||
-  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on AUD$ (Scored)</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on AUD$ (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 
@@ -2303,138 +5740,1007 @@ SELECT '<tr class="' ||
     ELSE 'No unauthorized privileges found'
     END || '</td>' ||
   '<td>Only DELETE_CATALOG_ROLE should have privileges on AUD$</td>' ||
-  '<td class="remediation">REVOKE ALL ON AUD$ FROM &lt;grantee&gt;;</td>' ||
+  '<td class="remediation">REVOKE ALL ON SYS.AUD$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
 FROM DBA_TAB_PRIVS
 WHERE TABLE_NAME='AUD$'
-AND GRANTEE NOT IN ('DELETE_CATALOG_ROLE');
+AND GRANTEE NOT IN ('DELETE_CATALOG_ROLE')
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 4.5.2 ALL on USER_HISTORY$
+-- 4.5.1 ALL on AUD$ - Oracle 12c+ Non-multitenant OR when running from PDB
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.1</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on AUD$ (Scored) - ' || 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized privileges found'
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on SYS.AUD$</td>' ||
+  '<td class="remediation">REVOKE ALL ON SYS.AUD$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE TABLE_NAME='AUD$'
+AND OWNER = 'SYS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.5.1 ALL on AUD$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.1</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on AUD$ (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN privilege_list
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on SYS.AUD$</td>' ||
+  '<td class="remediation">REVOKE ALL ON SYS.AUD$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='AUD$'
+  AND A.OWNER = 'SYS'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.2 ALL on USER_HISTORY$ - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.5.2</td>' ||
-  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on USER_HISTORY$ (Scored)</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on USER_HISTORY$ (Scored) - ' ||
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 
       LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
     ELSE 'No unauthorized privileges found'
     END || '</td>' ||
-  '<td>No privileges should be granted on USER_HISTORY$</td>' ||
+  '<td>No unauthorized privileges should be granted on USER_HISTORY$</td>' ||
   '<td class="remediation">REVOKE ALL ON USER_HISTORY$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
 FROM DBA_TAB_PRIVS
-WHERE TABLE_NAME='USER_HISTORY$';
+WHERE TABLE_NAME='USER_HISTORY$'
+AND (
+  -- Oracle 11g: no grantee filtering
+  (SELECT version FROM v$instance) LIKE '11.%'
+  OR
+  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+  ((SELECT version FROM v$instance) NOT LIKE '11.%'
+   AND OWNER = 'SYS'
+   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+   AND (
+     -- Non-multitenant database
+     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+     OR 
+     -- Running from PDB (not CDB$ROOT)
+     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+   )
+  )
+);
 
--- 4.5.3 ALL on LINK$
+-- 4.5.2 ALL on USER_HISTORY$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.2</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on USER_HISTORY$ (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN privilege_list
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on USER_HISTORY$</td>' ||
+  '<td class="remediation">REVOKE ALL ON USER_HISTORY$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='USER_HISTORY$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.3 ALL on LINK$ - Oracle 11g and 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.5.3</td>' ||
-  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on LINK$ (Scored)</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on LINK$ (Scored) - ' ||
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 
       LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
     ELSE 'No unauthorized privileges found'
     END || '</td>' ||
-  '<td>No privileges should be granted on LINK$</td>' ||
+  '<td>No unauthorized privileges should be granted on LINK$</td>' ||
   '<td class="remediation">REVOKE ALL ON LINK$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
 FROM DBA_TAB_PRIVS
-WHERE TABLE_NAME='LINK$';
+WHERE TABLE_NAME='LINK$'
+AND (
+  -- Oracle 11g: no grantee filtering
+  (SELECT version FROM v$instance) LIKE '11.%'
+  OR
+  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+  ((SELECT version FROM v$instance) NOT LIKE '11.%'
+   AND OWNER = 'SYS'
+   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+   AND (
+     -- Non-multitenant database
+     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+     OR 
+     -- Running from PDB (not CDB$ROOT)
+     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+   )
+  )
+);
 
--- 4.5.4 ALL on SYS.USER$
+-- 4.5.3 ALL on LINK$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.3</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on LINK$ (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN privilege_list
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on LINK$</td>' ||
+  '<td class="remediation">REVOKE ALL ON LINK$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='LINK$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.4 ALL on SYS.USER$ - Oracle 11g and 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.5.4</td>' ||
-  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on SYS.USER$ (Scored)</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on SYS.USER$ (Scored) - ' ||
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 
       LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
     ELSE 'No unauthorized privileges found'
     END || '</td>' ||
-  '<td>Only authorized system users should have privileges</td>' ||
+  '<td>No unauthorized privileges should be granted on SYS.USER$</td>' ||
   '<td class="remediation">REVOKE ALL ON SYS.USER$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
 FROM DBA_TAB_PRIVS
 WHERE TABLE_NAME='USER$'
-AND GRANTEE NOT IN ('CTXSYS','XDB','APEX_030200','APEX_040000','APEX_040100','APEX_040200','ORACLE_OCM');
+AND (
+  -- Oracle 11g: use hardcoded exclusion list
+  ((SELECT version FROM v$instance) LIKE '11.%'
+   AND GRANTEE NOT IN ('CTXSYS','XDB','APEX_030200','APEX_040000','APEX_040100','APEX_040200','ORACLE_OCM'))
+  OR
+  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+  ((SELECT version FROM v$instance) NOT LIKE '11.%'
+   AND OWNER = 'SYS'
+   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+   AND (
+     -- Non-multitenant database
+     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+     OR 
+     -- Running from PDB (not CDB$ROOT)
+     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+   )
+  )
+);
 
--- 4.5.5 ALL on DBA_%
+-- 4.5.4 ALL on SYS.USER$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.4</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on SYS.USER$ (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN privilege_list
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on SYS.USER$</td>' ||
+  '<td class="remediation">REVOKE ALL ON SYS.USER$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='USER$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.5 ALL on DBA_% - Oracle 11g and 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.5.5</td>' ||
-  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on DBA_% (Scored)</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on DBA_% (Scored) - ' ||
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 
       'Found ' || COUNT(*) || ' unauthorized privileges on DBA views'
     ELSE 'No unauthorized privileges found'
     END || '</td>' ||
-  '<td>Only authorized system users should have DBA view privileges</td>' ||
+  '<td>No unauthorized privileges should be granted on DBA_% views</td>' ||
   '<td class="remediation">REVOKE ALL ON &lt;dba_view&gt; FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
 FROM DBA_TAB_PRIVS
-WHERE TABLE_NAME LIKE 'DBA_%'
-AND GRANTEE NOT IN ('APPQOSSYS','AQ_ADMINISTRATOR_ROLE','CTXSYS','EXFSYS','MDSYS',
-'OLAP_XS_ADMIN','OLAPSYS','ORDSYS','OWB$CLIENT','OWBSYS','SELECT_CATALOG_ROLE',
-'WM_ADMIN_ROLE','WMSYS','XDBADMIN','LBACSYS','ADM_PARALLEL_EXECUTE_TASK','CISSCANROLE',
-'SYS','AUDIT_ADMIN','AUDIT_VIEWER','DATAPATCH_ROLE','DV_ACCTMGR','DBSFWUSER','SYSRAC',
-'DV_ADMIN','DVSYS','DV_MONITOR','AUDSYS','DV_SECANALYST','GSMADMIN_INTERNAL','DBA',
-'XS_CACHE_ADMIN','CAPTURE_ADMIN','SYSKM','GSMUSER_ROLE','ORACLE_OCM','SYSDG')
-AND NOT REGEXP_LIKE(GRANTEE,'^APEX_0[3-9][0-9][0-9][0-9][0-9]$');
+WHERE (
+  -- Oracle 11g: use specified exclusion list
+  ((SELECT version FROM v$instance) LIKE '11.%'
+   AND TABLE_NAME LIKE 'DBA_%'
+   AND GRANTEE NOT IN ('APPQOSSYS','AQ_ADMINISTRATOR_ROLE','CTXSYS','EXFSYS','MDSYS',
+   'OLAP_XS_ADMIN','OLAPSYS','ORDSYS','OWB$CLIENT','OWBSYS','SELECT_CATALOG_ROLE',
+   'WM_ADMIN_ROLE','WMSYS','XDBADMIN','LBACSYS','ADM_PARALLEL_EXECUTE_TASK','CISSCANROLE')
+   AND NOT REGEXP_LIKE(GRANTEE,'^APEX_0[3-9][0-9][0-9][0-9][0-9]$'))
+  OR
+  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+  ((SELECT version FROM v$instance) NOT LIKE '11.%'
+   AND TABLE_NAME LIKE 'DBA\_%' ESCAPE '\'
+   AND OWNER = 'SYS'
+   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+   AND (
+     -- Non-multitenant database
+     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+     OR 
+     -- Running from PDB (not CDB$ROOT)
+     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+   )
+  )
+);
 
--- 4.5.6 ALL on SYS.SCHEDULER$_CREDENTIAL
+-- 4.5.5 ALL on DBA_% - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.5</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on DBA_% (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN 'Found ' || priv_count || ' unauthorized privileges on DBA views in ' || container_name
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on DBA_% views</td>' ||
+  '<td class="remediation">REVOKE ALL ON &lt;dba_view&gt; FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.TABLE_NAME, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME LIKE 'DBA\_%' ESCAPE '\'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.6 ALL on SYS.SCHEDULER$_CREDENTIAL - Oracle 11g and 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.5.6</td>' ||
-  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on SYS.SCHEDULER$_CREDENTIAL (Scored)</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on SYS.SCHEDULER$_CREDENTIAL (Scored) - ' ||
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 
       LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
     ELSE 'No unauthorized privileges found'
     END || '</td>' ||
-  '<td>No privileges should be granted on SCHEDULER$_CREDENTIAL</td>' ||
+  '<td>No unauthorized privileges should be granted on SYS.SCHEDULER$_CREDENTIAL</td>' ||
   '<td class="remediation">REVOKE ALL ON SYS.SCHEDULER$_CREDENTIAL FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
 FROM DBA_TAB_PRIVS
-WHERE TABLE_NAME='SCHEDULER$_CREDENTIAL';
+WHERE TABLE_NAME='SCHEDULER$_CREDENTIAL'
+AND (
+  -- Oracle 11g: no grantee filtering
+  (SELECT version FROM v$instance) LIKE '11.%'
+  OR
+  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+  ((SELECT version FROM v$instance) NOT LIKE '11.%'
+   AND OWNER = 'SYS'
+   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+   AND (
+     -- Non-multitenant database
+     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+     OR 
+     -- Running from PDB (not CDB$ROOT)
+     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+   )
+  )
+);
 
--- 4.5.7 SYS.USER$MIG Has Been Dropped
+-- 4.5.6 ALL on SYS.SCHEDULER$_CREDENTIAL - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on SYS.SCHEDULER$_CREDENTIAL (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN privilege_list
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on SYS.SCHEDULER$_CREDENTIAL</td>' ||
+  '<td class="remediation">REVOKE ALL ON SYS.SCHEDULER$_CREDENTIAL FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='SCHEDULER$_CREDENTIAL'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.6a ALL on CDB_LOCAL_ADMINAUTH$ - Oracle 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
-  '<td>4.5.7</td>' ||
-  '<td>Ensure SYS.USER$MIG Has Been Dropped (Scored)</td>' ||
+  '<td>4.5.6a</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on CDB_LOCAL_ADMINAUTH$ (Oracle 12c+) (Scored)</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'USER$MIG table exists'
-    ELSE 'USER$MIG table not found (compliant)'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized privileges found'
     END || '</td>' ||
-  '<td>USER$MIG table should not exist</td>' ||
+  '<td>No unauthorized privileges should be granted on CDB_LOCAL_ADMINAUTH$</td>' ||
+  '<td class="remediation">REVOKE ALL ON CDB_LOCAL_ADMINAUTH$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE TABLE_NAME='CDB_LOCAL_ADMINAUTH$'
+AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND OWNER = 'SYS'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.5.6a ALL on CDB_LOCAL_ADMINAUTH$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6a</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on CDB_LOCAL_ADMINAUTH$ (Oracle 12c+) (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN privilege_list
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on CDB_LOCAL_ADMINAUTH$</td>' ||
+  '<td class="remediation">REVOKE ALL ON CDB_LOCAL_ADMINAUTH$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='CDB_LOCAL_ADMINAUTH$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.6b ALL on DEFAULT_PWD$ - Oracle 12c+ Non-multitenant/PDB
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6b</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on DEFAULT_PWD$ (Oracle 12c+) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized privileges found'
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on DEFAULT_PWD$</td>' ||
+  '<td class="remediation">REVOKE ALL ON DEFAULT_PWD$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE TABLE_NAME='DEFAULT_PWD$'
+AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND OWNER = 'SYS'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.5.6b ALL on DEFAULT_PWD$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6b</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on DEFAULT_PWD$ (Oracle 12c+) (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN privilege_list
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on DEFAULT_PWD$</td>' ||
+  '<td class="remediation">REVOKE ALL ON DEFAULT_PWD$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='DEFAULT_PWD$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.6c ALL on ENC$ - Oracle 12c+ Non-multitenant/PDB
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6c</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on ENC$ (Oracle 12c+) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized privileges found'
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on ENC$</td>' ||
+  '<td class="remediation">REVOKE ALL ON ENC$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE TABLE_NAME='ENC$'
+AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND OWNER = 'SYS'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.5.6c ALL on ENC$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6c</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on ENC$ (Oracle 12c+) (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN privilege_list
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on ENC$</td>' ||
+  '<td class="remediation">REVOKE ALL ON ENC$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='ENC$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.6d ALL on HISTGRM$ - Oracle 12c+ Non-multitenant/PDB
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6d</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on HISTGRM$ (Oracle 12c+) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized privileges found'
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on HISTGRM$</td>' ||
+  '<td class="remediation">REVOKE ALL ON HISTGRM$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE TABLE_NAME='HISTGRM$'
+AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND OWNER = 'SYS'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.5.6d ALL on HISTGRM$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6d</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on HISTGRM$ (Oracle 12c+) (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN privilege_list
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on HISTGRM$</td>' ||
+  '<td class="remediation">REVOKE ALL ON HISTGRM$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='HISTGRM$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.6e ALL on HIST_HEAD$ - Oracle 12c+ Non-multitenant/PDB
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6e</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on HIST_HEAD$ (Oracle 12c+) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized privileges found'
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on HIST_HEAD$</td>' ||
+  '<td class="remediation">REVOKE ALL ON HIST_HEAD$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE TABLE_NAME='HIST_HEAD$'
+AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND OWNER = 'SYS'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.5.6e ALL on HIST_HEAD$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6e</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on HIST_HEAD$ (Oracle 12c+) (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN privilege_list
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on HIST_HEAD$</td>' ||
+  '<td class="remediation">REVOKE ALL ON HIST_HEAD$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='HIST_HEAD$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.6f ALL on PDB_SYNC$ - Oracle 12c+ Non-multitenant/PDB
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6f</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on PDB_SYNC$ (Oracle 12c+) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized privileges found'
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on PDB_SYNC$</td>' ||
+  '<td class="remediation">REVOKE ALL ON PDB_SYNC$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE TABLE_NAME='PDB_SYNC$'
+AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND OWNER = 'SYS'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.5.6f ALL on PDB_SYNC$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6f</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on PDB_SYNC$ (Oracle 12c+) (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN privilege_list
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on PDB_SYNC$</td>' ||
+  '<td class="remediation">REVOKE ALL ON PDB_SYNC$ FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='PDB_SYNC$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.6g ALL on XS$VERIFIERS - Oracle 12c+ Non-multitenant/PDB
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6g</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on XS$VERIFIERS (Oracle 12c+) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized privileges found'
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on XS$VERIFIERS</td>' ||
+  '<td class="remediation">REVOKE ALL ON XS$VERIFIERS FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE TABLE_NAME='XS$VERIFIERS'
+AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND OWNER = 'SYS'
+AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+);
+
+-- 4.5.6g ALL on XS$VERIFIERS - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6g</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on XS$VERIFIERS (Oracle 12c+) (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN privilege_list
+    ELSE 'No unauthorized privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>No unauthorized privileges should be granted on XS$VERIFIERS</td>' ||
+  '<td class="remediation">REVOKE ALL ON XS$VERIFIERS FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='XS$VERIFIERS'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.5.7 Ensure 'SYS.USER$MIG' Has Been Dropped (11g and 12c+ non-multitenant/PDB)
+WITH user_mig_11g AS (
+  SELECT 
+    vi.version,
+    at.OWNER,
+    at.TABLE_NAME
+  FROM v$instance vi
+  CROSS JOIN ALL_TABLES at
+  WHERE vi.version LIKE '11.%'
+  AND at.OWNER='SYS'
+  AND at.TABLE_NAME='USER$MIG'
+),
+user_mig_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    dt.OWNER,
+    dt.TABLE_NAME
+  FROM v$instance vi
+  CROSS JOIN DBA_TABLES dt
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND dt.TABLE_NAME='USER$MIG' 
+  AND dt.OWNER='SYS'
+),
+user_mig_combined AS (
+  SELECT version, OWNER, TABLE_NAME FROM user_mig_11g
+  UNION ALL
+  SELECT version, OWNER, TABLE_NAME FROM user_mig_12c_non_mt
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN (SELECT COUNT(*) FROM user_mig_combined) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.7</td>' ||
+  '<td>Ensure SYS.USER$MIG Has Been Dropped (Scored)</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM user_mig_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN (SELECT COUNT(*) FROM user_mig_combined) > 0 THEN 
+      'SYS.USER$MIG table found'
+    ELSE 'SYS.USER$MIG table not found (compliant)'
+    END || '</td>' ||
+  '<td>SYS.USER$MIG table should be dropped</td>' ||
   '<td class="remediation">DROP TABLE SYS.USER$MIG;</td>' ||
   '</tr>'
-FROM ALL_TABLES
-WHERE OWNER='SYS' AND TABLE_NAME='USER$MIG';
+FROM DUAL;
+
+-- 4.5.7b Ensure 'SYS.USER$MIG' Has Been Dropped (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(T.TABLE_NAME) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.7b</td>' ||
+  '<td>Ensure SYS.USER$MIG Has Been Dropped in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(T.TABLE_NAME) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(T.TABLE_NAME) > 0 THEN 
+      'SYS.USER$MIG found in: ' || LISTAGG(DECODE(T.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE T.CON_ID = B.CON_ID)), ', ') WITHIN GROUP (ORDER BY T.CON_ID)
+    ELSE 'SYS.USER$MIG table not found in any container (compliant)'
+    END || '</td>' ||
+  '<td>SYS.USER$MIG table should be dropped from all containers</td>' ||
+  '<td class="remediation">For each container: DROP TABLE SYS.USER$MIG;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    A.CON_ID,
+    A.OWNER,
+    A.TABLE_NAME
+  FROM CDB_TABLES A
+  WHERE A.TABLE_NAME='USER$MIG' 
+  AND A.OWNER='SYS'
+) T
+GROUP BY ef.env_type;
 
 PROMPT </table>
 
@@ -2443,53 +6749,162 @@ PROMPT <h3>4.6-4.10 Additional Security Checks</h3>
 PROMPT <table>
 PROMPT <tr><th width="5%">Control</th><th width="35%">Title</th><th width="8%">Status</th><th width="20%">Current Value</th><th width="15%">Expected</th><th width="17%">Remediation</th></tr>
 
--- 4.6 %ANY% Privileges
+-- 4.6 %ANY% Privileges - Oracle 11g and 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.6</td>' ||
-  '<td>Ensure %ANY% Is Revoked from Unauthorized GRANTEE (Scored)</td>' ||
+  '<td>Ensure %ANY% Is Revoked from Unauthorized GRANTEE (Scored) - ' ||
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 
-      'Found ' || COUNT(*) || ' unauthorized ANY privileges (see detailed report)'
-    ELSE 'No unauthorized ANY privileges found'
+      'Found ' || COUNT(*) || ' unauthorized %ANY% privileges: ' ||
+      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    ELSE 'No unauthorized %ANY% privileges found'
     END || '</td>' ||
-  '<td>Only authorized system users should have ANY privileges</td>' ||
+  '<td>Only authorized system users should have %ANY% privileges</td>' ||
   '<td class="remediation">REVOKE &lt;ANY_PRIVILEGE&gt; FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE LIKE '%ANY%'
-AND GRANTEE NOT IN ('AQ_ADMINISTRATOR_ROLE','DBA','DBSNMP','EXFSYS','EXP_FULL_DATABASE',
-'IMP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE','JAVADEBUGPRIV','MDSYS','OEM_MONITOR',
-'OLAPSYS','OLAP_DBA','ORACLE_OCM','OWB$CLIENT','OWBSYS','SCHEDULER_ADMIN',
-'SPATIAL_CSW_ADMIN_USR','SPATIAL_WFS_ADMIN_USR','SYS','SYSMAN','SYSTEM','WMSYS',
-'APEX_030200','APEX_040000','APEX_040100','APEX_040200','LBACSYS','OUTLN','AUDIT_ADMIN',
-'SYSBACKUP','GGSYS','CTXSYS','AUDSYS','DVSYS','GSMADMIN_INTERNAL','RECOVERY_CATALOG_OWNER_VPD',
-'DV_REALM_OWNER','EM_EXPRESS_ALL','SYSDG','XDB');
+AND (
+  -- Oracle 11g: use specified exclusion list
+  ((SELECT version FROM v$instance) LIKE '11.%'
+   AND GRANTEE NOT IN ('AQ_ADMINISTRATOR_ROLE','DBA','DBSNMP','EXFSYS',
+   'EXP_FULL_DATABASE','IMP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE',
+   'JAVADEBUGPRIV','MDSYS','OEM_MONITOR','OLAPSYS','OLAP_DBA','ORACLE_OCM',
+   'OWB$CLIENT','OWBSYS','SCHEDULER_ADMIN','SPATIAL_CSW_ADMIN_USR',
+   'SPATIAL_WFS_ADMIN_USR','SYS','SYSMAN','SYSTEM','WMSYS','APEX_030200',
+   'APEX_040000','APEX_040100','APEX_040200','LBACSYS','OUTLN'))
+  OR
+  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+  ((SELECT version FROM v$instance) NOT LIKE '11.%'
+   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+   AND (
+     -- Non-multitenant database
+     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+     OR 
+     -- Running from PDB (not CDB$ROOT)
+     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+   )
+  )
+);
 
--- 4.7 DBA_SYS_PRIVS with ADMIN_OPTION
+-- 4.6 %ANY% Privileges - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.6</td>' ||
+  '<td>Ensure %ANY% Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN 'Found ' || priv_count || ' unauthorized %ANY% privileges in ' || container_name || ': ' || privilege_list
+    ELSE 'No unauthorized %ANY% privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have %ANY% privileges</td>' ||
+  '<td class="remediation">REVOKE &lt;ANY_PRIVILEGE&gt; FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE LIKE '%ANY%'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.7 DBA_SYS_PRIVS with ADMIN_OPTION - Oracle 11g and 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.7</td>' ||
-  '<td>Ensure DBA_SYS_PRIVS Is Revoked from Unauthorized GRANTEE with ADMIN_OPTION=YES (Scored)</td>' ||
+  '<td>Ensure DBA_SYS_PRIVS Is Revoked from Unauthorized GRANTEE with ADMIN_OPTION=YES (Scored) - ' ||
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
     CASE WHEN COUNT(*) > 0 THEN 
+      'Found ' || COUNT(*) || ' unauthorized ADMIN_OPTION privileges: ' ||
       LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
-    ELSE 'No unauthorized admin options found'
+    ELSE 'No unauthorized ADMIN_OPTION privileges found'
     END || '</td>' ||
-  '<td>Only authorized system users should have ADMIN_OPTION</td>' ||
+  '<td>Only authorized system users should have ADMIN_OPTION=YES</td>' ||
   '<td class="remediation">REVOKE &lt;privilege&gt; FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE ADMIN_OPTION='YES'
-AND GRANTEE NOT IN ('AQ_ADMINISTRATOR_ROLE','DBA','OWBSYS','SCHEDULER_ADMIN','SYS','SYSTEM','WMSYS','APEX_030200','APEX_040000','APEX_040100','APEX_040200','DV_ACCTMGR','SYSKM');
+AND (
+  -- Oracle 11g: use specified exclusion list
+  ((SELECT version FROM v$instance) LIKE '11.%'
+   AND GRANTEE NOT IN ('AQ_ADMINISTRATOR_ROLE','DBA','OWBSYS','SCHEDULER_ADMIN','SYS','SYSTEM','WMSYS','APEX_030200','APEX_040000','APEX_040100','APEX_040200'))
+  OR
+  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+  ((SELECT version FROM v$instance) NOT LIKE '11.%'
+   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+   AND (
+     -- Non-multitenant database
+     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+     OR 
+     -- Running from PDB (not CDB$ROOT)
+     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+   )
+  )
+);
+
+-- 4.7 DBA_SYS_PRIVS with ADMIN_OPTION - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.7</td>' ||
+  '<td>Ensure DBA_SYS_PRIVS Is Revoked from Unauthorized GRANTEE with ADMIN_OPTION=YES (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN 'Found ' || priv_count || ' unauthorized ADMIN_OPTION privileges in ' || container_name || ': ' || privilege_list
+    ELSE 'No unauthorized ADMIN_OPTION privileges found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have ADMIN_OPTION=YES</td>' ||
+  '<td class="remediation">REVOKE &lt;privilege&gt; FROM &lt;grantee&gt;;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.ADMIN_OPTION='YES'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
 
 -- 4.8 Proxy Users Have Only CONNECT Privilege
 SELECT '<tr class="' ||
@@ -2512,17 +6927,22 @@ FROM DBA_ROLE_PRIVS
 WHERE GRANTEE IN (SELECT PROXY FROM DBA_PROXIES)
 AND GRANTED_ROLE NOT IN ('CONNECT');
 
--- 4.9 EXECUTE ANY PROCEDURE from OUTLN
+-- 4.9 EXECUTE ANY PROCEDURE from OUTLN - Oracle 11g and 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.9</td>' ||
-  '<td>Ensure EXECUTE ANY PROCEDURE Is Revoked from OUTLN (Scored)</td>' ||
+  '<td>Ensure EXECUTE ANY PROCEDURE Is Revoked from OUTLN (Scored) - ' ||
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'OUTLN has EXECUTE ANY PROCEDURE'
+    CASE WHEN COUNT(*) > 0 THEN 'OUTLN has EXECUTE ANY PROCEDURE: ' ||
+      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
     ELSE 'OUTLN does not have EXECUTE ANY PROCEDURE'
     END || '</td>' ||
   '<td>OUTLN should not have EXECUTE ANY PROCEDURE</td>' ||
@@ -2530,19 +6950,71 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='EXECUTE ANY PROCEDURE'
-AND GRANTEE='OUTLN';
+AND GRANTEE='OUTLN'
+AND (
+  -- Oracle 11g: always check
+  (SELECT version FROM v$instance) LIKE '11.%'
+  OR
+  -- Oracle 12c+ non-multitenant or PDB: avoid running in CDB$ROOT
+  ((SELECT version FROM v$instance) NOT LIKE '11.%'
+   AND (
+     -- Non-multitenant database
+     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+     OR 
+     -- Running from PDB (not CDB$ROOT)
+     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+   )
+  )
+);
 
--- 4.10 EXECUTE ANY PROCEDURE from DBSNMP
+-- 4.9 EXECUTE ANY PROCEDURE from OUTLN - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.9</td>' ||
+  '<td>Ensure EXECUTE ANY PROCEDURE Is Revoked from OUTLN (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN 'OUTLN has EXECUTE ANY PROCEDURE in ' || container_name || ': ' || privilege_list
+    ELSE 'OUTLN does not have EXECUTE ANY PROCEDURE in ' || container_name
+    END || '</td>' ||
+  '<td>OUTLN should not have EXECUTE ANY PROCEDURE</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ANY PROCEDURE FROM OUTLN;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='EXECUTE ANY PROCEDURE'
+  AND A.GRANTEE='OUTLN'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.10 EXECUTE ANY PROCEDURE from DBSNMP - Oracle 11g and 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.10</td>' ||
-  '<td>Ensure EXECUTE ANY PROCEDURE Is Revoked from DBSNMP (Scored)</td>' ||
+  '<td>Ensure EXECUTE ANY PROCEDURE Is Revoked from DBSNMP (Scored) - ' ||
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END || '</td>' ||
   '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'DBSNMP has EXECUTE ANY PROCEDURE'
+    CASE WHEN COUNT(*) > 0 THEN 'DBSNMP has EXECUTE ANY PROCEDURE: ' ||
+      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
     ELSE 'DBSNMP does not have EXECUTE ANY PROCEDURE'
     END || '</td>' ||
   '<td>DBSNMP should not have EXECUTE ANY PROCEDURE</td>' ||
@@ -2550,7 +7022,139 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='EXECUTE ANY PROCEDURE'
-AND GRANTEE='DBSNMP';
+AND GRANTEE='DBSNMP'
+AND (
+  -- Oracle 11g: always check
+  (SELECT version FROM v$instance) LIKE '11.%'
+  OR
+  -- Oracle 12c+ non-multitenant or PDB: avoid running in CDB$ROOT
+  ((SELECT version FROM v$instance) NOT LIKE '11.%'
+   AND (
+     -- Non-multitenant database
+     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+     OR 
+     -- Running from PDB (not CDB$ROOT)
+     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+   )
+  )
+);
+
+-- 4.10 EXECUTE ANY PROCEDURE from DBSNMP - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.10</td>' ||
+  '<td>Ensure EXECUTE ANY PROCEDURE Is Revoked from DBSNMP (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN priv_count > 0 THEN 'DBSNMP has EXECUTE ANY PROCEDURE in ' || container_name || ': ' || privilege_list
+    ELSE 'DBSNMP does not have EXECUTE ANY PROCEDURE in ' || container_name
+    END || '</td>' ||
+  '<td>DBSNMP should not have EXECUTE ANY PROCEDURE</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ANY PROCEDURE FROM DBSNMP;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE='EXECUTE ANY PROCEDURE'
+  AND A.GRANTEE='DBSNMP'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 4.11 Ensure No Public Database Links Exist (11g and 12c+ non-multitenant/PDB)
+WITH public_db_links_11g AS (
+  SELECT 
+    vi.version,
+    dbl.DB_LINK,
+    dbl.HOST
+  FROM v$instance vi
+  CROSS JOIN DBA_DB_LINKS dbl
+  WHERE vi.version LIKE '11.%'
+  AND dbl.OWNER = 'PUBLIC'
+),
+public_db_links_12c_non_mt AS (
+  SELECT 
+    vi.version,
+    dbl.DB_LINK,
+    dbl.HOST
+  FROM v$instance vi
+  CROSS JOIN DBA_DB_LINKS dbl
+  WHERE vi.version NOT LIKE '11.%' 
+  AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO' OR
+       ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'))
+  AND dbl.OWNER = 'PUBLIC'
+),
+public_db_links_combined AS (
+  SELECT version, DB_LINK, HOST FROM public_db_links_11g
+  UNION ALL
+  SELECT version, DB_LINK, HOST FROM public_db_links_12c_non_mt
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN (SELECT COUNT(*) FROM public_db_links_combined) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.11</td>' ||
+  '<td>Ensure No Public Database Links Exist (Scored)</td>' ||
+  '<td>' || CASE WHEN (SELECT COUNT(*) FROM public_db_links_combined) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN (SELECT COUNT(*) FROM public_db_links_combined) > 0 THEN 
+      (SELECT LISTAGG(DB_LINK || '->' || HOST, ', ') WITHIN GROUP (ORDER BY DB_LINK) FROM public_db_links_combined)
+    ELSE 'No public database links found (compliant)'
+    END || '</td>' ||
+  '<td>No public database links should exist</td>' ||
+  '<td class="remediation">DROP PUBLIC DATABASE LINK &lt;DB_LINK&gt;;</td>' ||
+  '</tr>'
+FROM DUAL;
+
+-- 4.11b Ensure No Public Database Links Exist (12c+ multi-tenant)
+WITH environment_flag AS (
+  SELECT 
+    CASE 
+      WHEN vi.version LIKE '11.%' THEN 1
+      WHEN vi.version NOT LIKE '11.%' AND ((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES') THEN 2
+      ELSE 0
+    END as env_type
+  FROM v$instance vi
+)
+SELECT CASE WHEN ef.env_type = 2 THEN
+  '<tr class="' ||
+  CASE 
+    WHEN COUNT(L.DB_LINK) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.11b</td>' ||
+  '<td>Ensure No Public Database Links Exist in All Containers (12c+ Multi-tenant) (Scored)</td>' ||
+  '<td>' || CASE WHEN COUNT(L.DB_LINK) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(L.DB_LINK) > 0 THEN 
+      LISTAGG(DECODE(L.CON_ID,0,(SELECT NAME FROM V$DATABASE),1,(SELECT NAME FROM V$DATABASE),(SELECT NAME FROM V$PDBS B WHERE L.CON_ID = B.CON_ID)) || ':' || L.DB_LINK || '->' || L.HOST, '; ') WITHIN GROUP (ORDER BY L.CON_ID, L.DB_LINK)
+    ELSE 'No public database links found in any container (compliant)'
+    END || '</td>' ||
+  '<td>No public database links should exist in any container</td>' ||
+  '<td class="remediation">For each container: DROP PUBLIC DATABASE LINK &lt;DB_LINK&gt;;</td>' ||
+  '</tr>'
+ELSE '' END
+FROM environment_flag ef
+CROSS JOIN (
+  SELECT 
+    A.CON_ID,
+    A.DB_LINK,
+    A.HOST
+  FROM CDB_DB_LINKS A
+  WHERE A.OWNER = 'PUBLIC'
+) L
+GROUP BY ef.env_type;
 
 PROMPT </table>
 
@@ -3990,10 +8594,37 @@ PROMPT -- WARNING: Review and test all commands before execution!
 PROMPT -- Some changes require database restart and may impact applications.
 PROMPT -- Execute in development environment first as SYSDBA.
 PROMPT --
-PROMPT -- MULTITENANT DATABASE NOTES:
-PROMPT -- - System parameters: Connect to CDB root as SYSDBA
-PROMPT -- - Container-scoped privileges: May require CONTAINER=ALL syntax
-PROMPT -- - Some operations not allowed from PDB (connect to CDB root)
+PROMPT -- CIS MULTITENANT DATABASE REQUIREMENTS:
+PROMPT -- Per CIS Oracle Database 12c/18c/19c Benchmarks, multitenant databases
+PROMPT -- require assessment and remediation at BOTH levels:
+PROMPT --
+PROMPT -- 1. CDB ROOT LEVEL (System-wide controls):
+PROMPT --    - Connect: sqlplus / as sysdba (to CDB$ROOT)
+PROMPT --    - System parameters with CONTAINER=ALL
+PROMPT --    - Common users and roles (C##)
+PROMPT --    - System-wide auditing policies
+PROMPT --
+PROMPT -- 2. PDB LEVEL (Database-specific controls):
+PROMPT --    - Connect: sqlplus user/pass@pdb_service
+PROMPT --    - Local users and profiles
+PROMPT --    - PDB-specific privileges
+PROMPT --    - Database-level audit settings
+PROMPT --
+PROMPT -- CURRENT ASSESSMENT SCOPE:
+SET DEFINE ON
+SELECT CASE 
+  WHEN '&current_container' = 'CDB$ROOT' THEN
+    '-- Running from CDB$ROOT: This covers SYSTEM-LEVEL controls' ||
+    CHR(10) || '-- IMPORTANT: Also run this script from each PDB for complete coverage'
+  WHEN '&is_pdb' = 'YES' THEN
+    '-- Running from PDB (' || '&container_name' || '): This covers DATABASE-LEVEL controls' ||
+    CHR(10) || '-- IMPORTANT: Also run this script from CDB$ROOT for system-level controls'
+  WHEN '&is_multitenant' = 'NO' THEN
+    '-- Running from Non-CDB: All controls apply directly'
+  ELSE
+    '-- Running from Single-tenant database: All controls apply directly'
+END FROM DUAL;
+SET DEFINE OFF
 PROMPT -- ============================================================================
 PROMPT
 PROMPT -- SECTION 1: DATABASE PARAMETER CORRECTIONS
@@ -4133,7 +8764,7 @@ SELECT CASE WHEN vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version 
     'ALTER SYSTEM SET COMMON_USER_PREFIX = ''C##'' SCOPE = SPFILE;' || CHR(10)
   ELSE '' END
 ELSE '' END
-FROM V$PARAMETER p, V$INSTANCE vi WHERE UPPER(p.NAME) = 'COMMON_USER_PREFIX';
+FROM V$PARAMETER p CROSS JOIN V$INSTANCE vi WHERE UPPER(p.NAME) = 'COMMON_USER_PREFIX';
 
 PROMPT
 PROMPT -- ============================================================================
@@ -4146,6 +8777,24 @@ SELECT CASE WHEN COUNT(*) > 0 THEN
   LISTAGG('DROP USER ' || USERNAME || ' CASCADE;', CHR(10)) WITHIN GROUP (ORDER BY USERNAME) || CHR(10)
 ELSE '' END
 FROM ALL_USERS WHERE USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH');
+
+-- Fix common user naming convention in CDB (12c+)
+SELECT CASE 
+  WHEN (vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version LIKE '19.%')
+    AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+    AND COUNT(*) > 0 
+  THEN
+    '-- Fix common user naming convention (CIS 1.5)' || CHR(10) ||
+    '-- Common users found without C## prefix: ' || LISTAGG(du.USERNAME, ', ') WITHIN GROUP (ORDER BY du.USERNAME) || CHR(10) ||
+    '-- Review and either rename or drop these users:' || CHR(10) ||
+    LISTAGG('-- DROP USER ' || du.USERNAME || ' CASCADE; -- or rename if needed', CHR(10)) WITHIN GROUP (ORDER BY du.USERNAME) || CHR(10) ||
+    '-- Note: Common users must start with C## in CDB environments' || CHR(10)
+ELSE '' END
+FROM DBA_USERS du CROSS JOIN V$INSTANCE vi
+WHERE du.COMMON = 'YES' 
+AND du.USERNAME NOT LIKE 'C##%'
+AND du.USERNAME NOT IN ('SYS','SYSTEM')
+GROUP BY vi.version;
 
 -- Fix profile settings (only if needed)
 SELECT CASE WHEN (
@@ -4382,6 +9031,46 @@ PROMPT -- 3. Verify changes: SELECT name, value FROM v$parameter WHERE name IN (
 PROMPT -- 4. Test application functionality
 PROMPT -- 5. Update security documentation
 PROMPT -- 6. Schedule follow-up CIS audit to verify compliance
+PROMPT
+PROMPT -- ============================================================================
+PROMPT -- COMPLETE CIS MULTITENANT ASSESSMENT CHECKLIST
+PROMPT -- ============================================================================
+
+SET DEFINE ON
+SELECT CASE 
+  WHEN '&is_multitenant' = 'YES' THEN
+    '-- COMPLETE CIS ASSESSMENT FOR MULTITENANT DATABASE:' || CHR(10) ||
+    '-- ' || CHR(10) ||
+    '-- Step 1: CDB Root Assessment (System-level controls)' || CHR(10) ||
+    '--   Connect: sqlplus / as sysdba' || CHR(10) ||
+    '--   Ensure connected to CDB$ROOT: SELECT SYS_CONTEXT(''USERENV'', ''CON_NAME'') FROM DUAL;' || CHR(10) ||
+    '--   Run: @cis_benchmark_11g_through_19c.sql' || CHR(10) ||
+    '-- ' || CHR(10) ||
+    '-- Step 2: Each PDB Assessment (Database-level controls)' || CHR(10) ||
+    '--   List PDBs: SELECT name, open_mode FROM v$pdbs;' || CHR(10) ||
+    '--   For each PDB:' || CHR(10) ||
+    '--     Connect: sqlplus user/pass@pdb_service_name' || CHR(10) ||
+    '--     Run: @cis_benchmark_11g_through_19c.sql' || CHR(10) ||
+    '-- ' || CHR(10) ||
+    '-- Step 3: Combine Results' || CHR(10) ||
+    '--   CDB Root results = System-wide compliance' || CHR(10) ||
+    '--   Each PDB results = Database-specific compliance' || CHR(10) ||
+    '--   Overall compliance = CDB Root + All PDBs' || CHR(10) ||
+    '-- ' || CHR(10) ||
+    CASE WHEN '&current_container' = 'CDB$ROOT' THEN
+      '-- CURRENT STATUS: CDB Root assessment complete' || CHR(10) ||
+      '-- NEXT STEPS: Run assessment in each PDB for complete coverage' || CHR(10) ||
+      '-- List your PDBs: SELECT name, open_mode FROM v$pdbs WHERE name != ''PDB$SEED'';'
+    ELSE
+      '-- CURRENT STATUS: PDB (' || '&container_name' || ') assessment complete' || CHR(10) ||
+      '-- NEXT STEPS: Run assessment from CDB$ROOT for system-level controls' || CHR(10) ||
+      '-- Connect to CDB Root: sqlplus / as sysdba'
+    END
+  ELSE
+    '-- Single-tenant database: Assessment complete for all controls' || CHR(10) ||
+    '-- No additional container-level assessments required'
+END FROM DUAL;
+SET DEFINE OFF
 PROMPT
 PROMPT ============================================================================
 PROMPT                    END OF REMEDIATION COMMANDS
