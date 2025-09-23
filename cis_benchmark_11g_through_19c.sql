@@ -3967,34 +3967,45 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.2.1 DBMS_SYS_SQL - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.2.1</td>' ||
-  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_SYS_SQL (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure EXECUTE Is Revoked from PUBLIC on DBMS_SYS_SQL (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    CASE WHEN priv_count > 0 THEN 'PUBLIC has EXECUTE privilege'
     ELSE 'No PUBLIC privilege found'
     END || '</td>' ||
   '<td>No EXECUTE privilege for PUBLIC</td>' ||
   '<td class="remediation">REVOKE EXECUTE ON DBMS_SYS_SQL FROM PUBLIC;</td>' ||
   '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_SYS_SQL'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_TAB_PRIVS 
+     WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_SYS_SQL'
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.2.1 DBMS_SYS_SQL - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -4344,37 +4355,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.3.1 SELECT_ANY_DICTIONARY - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.1</td>' ||
-  '<td>Ensure SELECT_ANY_DICTIONARY Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure SELECT_ANY_DICTIONARY Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized system users should have this privilege</td>' ||
   '<td class="remediation">REVOKE SELECT_ANY_DICTIONARY FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='SELECT ANY DICTIONARY'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='SELECT ANY DICTIONARY'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='SELECT ANY DICTIONARY'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.3.1 SELECT_ANY_DICTIONARY - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -4434,37 +4466,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.3.2 SELECT ANY TABLE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.2</td>' ||
-  '<td>Ensure SELECT ANY TABLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure SELECT ANY TABLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized system users should have this privilege</td>' ||
   '<td class="remediation">REVOKE SELECT ANY TABLE FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='SELECT ANY TABLE'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='SELECT ANY TABLE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='SELECT ANY TABLE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.3.2 SELECT ANY TABLE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -4524,37 +4577,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.3.3 AUDIT SYSTEM - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.3</td>' ||
-  '<td>Ensure AUDIT SYSTEM Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure AUDIT SYSTEM Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized system users should have this privilege</td>' ||
   '<td class="remediation">REVOKE AUDIT SYSTEM FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='AUDIT SYSTEM'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='AUDIT SYSTEM'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='AUDIT SYSTEM'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.3.3 AUDIT SYSTEM - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -4613,37 +4687,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.3.4 EXEMPT ACCESS POLICY - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.4</td>' ||
-  '<td>Ensure EXEMPT ACCESS POLICY Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure EXEMPT ACCESS POLICY Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>No users should have this privilege</td>' ||
   '<td class="remediation">REVOKE EXEMPT ACCESS POLICY FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='EXEMPT ACCESS POLICY'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='EXEMPT ACCESS POLICY'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='EXEMPT ACCESS POLICY'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.3.4 EXEMPT ACCESS POLICY - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -4703,37 +4798,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.3.5 BECOME USER - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.5</td>' ||
-  '<td>Ensure BECOME USER Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure BECOME USER Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized system users should have this privilege</td>' ||
   '<td class="remediation">REVOKE BECOME USER FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='BECOME USER'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='BECOME USER'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='BECOME USER'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.3.5 BECOME USER - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -4793,37 +4909,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.3.6 CREATE_PROCEDURE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.6</td>' ||
-  '<td>Ensure CREATE_PROCEDURE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure CREATE_PROCEDURE Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized users and roles should have this privilege</td>' ||
   '<td class="remediation">REVOKE CREATE PROCEDURE FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='CREATE PROCEDURE'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='CREATE PROCEDURE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='CREATE PROCEDURE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.3.6 CREATE_PROCEDURE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -4905,37 +5042,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.3.8 CREATE ANY LIBRARY - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.8</td>' ||
-  '<td>Ensure CREATE ANY LIBRARY Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure CREATE ANY LIBRARY Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized system users should have this privilege</td>' ||
   '<td class="remediation">REVOKE CREATE ANY LIBRARY FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='CREATE ANY LIBRARY'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='CREATE ANY LIBRARY'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='CREATE ANY LIBRARY'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.3.8 CREATE ANY LIBRARY - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -4995,37 +5153,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.3.9 CREATE LIBRARY - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.9</td>' ||
-  '<td>Ensure CREATE LIBRARY Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure CREATE LIBRARY Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized system users should have this privilege</td>' ||
   '<td class="remediation">REVOKE CREATE LIBRARY FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='CREATE LIBRARY'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='CREATE LIBRARY'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='CREATE LIBRARY'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.3.9 CREATE LIBRARY - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -5085,37 +5264,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.3.10 GRANT ANY OBJECT PRIVILEGE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.10</td>' ||
-  '<td>Ensure GRANT ANY OBJECT PRIVILEGE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure GRANT ANY OBJECT PRIVILEGE Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized system users should have this privilege</td>' ||
   '<td class="remediation">REVOKE GRANT ANY OBJECT PRIVILEGE FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='GRANT ANY OBJECT PRIVILEGE'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='GRANT ANY OBJECT PRIVILEGE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='GRANT ANY OBJECT PRIVILEGE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.3.10 GRANT ANY OBJECT PRIVILEGE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -5175,37 +5375,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.3.11 GRANT ANY ROLE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.11</td>' ||
-  '<td>Ensure GRANT ANY ROLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure GRANT ANY ROLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized system users should have this privilege</td>' ||
   '<td class="remediation">REVOKE GRANT ANY ROLE FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='GRANT ANY ROLE'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='GRANT ANY ROLE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='GRANT ANY ROLE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.3.11 GRANT ANY ROLE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -5265,37 +5486,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.3.12 GRANT ANY PRIVILEGE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.3.12</td>' ||
-  '<td>Ensure GRANT ANY PRIVILEGE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure GRANT ANY PRIVILEGE Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized system users should have this privilege</td>' ||
   '<td class="remediation">REVOKE GRANT ANY PRIVILEGE FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='GRANT ANY PRIVILEGE'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='GRANT ANY PRIVILEGE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='GRANT ANY PRIVILEGE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.3.12 GRANT ANY PRIVILEGE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -5362,37 +5604,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.4.1 DELETE_CATALOG_ROLE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.4.1</td>' ||
-  '<td>Ensure DELETE_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure DELETE_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized system users should have this role</td>' ||
   '<td class="remediation">REVOKE DELETE_CATALOG_ROLE FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_ROLE_PRIVS
-WHERE GRANTED_ROLE='DELETE_CATALOG_ROLE'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_ROLE_PRIVS 
+     WHERE GRANTED_ROLE='DELETE_CATALOG_ROLE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_ROLE_PRIVS 
+     WHERE GRANTED_ROLE='DELETE_CATALOG_ROLE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.4.1 DELETE_CATALOG_ROLE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -5452,37 +5715,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.4.2 SELECT_CATALOG_ROLE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.4.2</td>' ||
-  '<td>Ensure SELECT_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure SELECT_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized system users should have this role</td>' ||
   '<td class="remediation">REVOKE SELECT_CATALOG_ROLE FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_ROLE_PRIVS
-WHERE GRANTED_ROLE='SELECT_CATALOG_ROLE'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_ROLE_PRIVS 
+     WHERE GRANTED_ROLE='SELECT_CATALOG_ROLE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_ROLE_PRIVS 
+     WHERE GRANTED_ROLE='SELECT_CATALOG_ROLE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.4.2 SELECT_CATALOG_ROLE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -5542,37 +5826,58 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.4.3 EXECUTE_CATALOG_ROLE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.4.3</td>' ||
-  '<td>Ensure EXECUTE_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure EXECUTE_CATALOG_ROLE Is Revoked from Unauthorized GRANTEE (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN grantee_list
     ELSE 'No unauthorized grantees found'
     END || '</td>' ||
   '<td>Only authorized system users should have this role</td>' ||
   '<td class="remediation">REVOKE EXECUTE_CATALOG_ROLE FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_ROLE_PRIVS
-WHERE GRANTED_ROLE='EXECUTE_CATALOG_ROLE'
-AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_ROLE_PRIVS 
+     WHERE GRANTED_ROLE='EXECUTE_CATALOG_ROLE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_ROLE_PRIVS 
+     WHERE GRANTED_ROLE='EXECUTE_CATALOG_ROLE'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS grantee_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.4.3 EXECUTE_CATALOG_ROLE - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -5635,44 +5940,67 @@ WITH dba_access AS (
   SELECT 'GRANT' AS PATH, GRANTEE, GRANTED_ROLE
   FROM DBA_ROLE_PRIVS
   WHERE GRANTED_ROLE = 'DBA' 
-  AND GRANTEE NOT IN ('SYS', 'SYSTEM')
+    AND GRANTEE NOT IN ('SYS', 'SYSTEM')
+    AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
   UNION
   -- Proxy access to DBA users
   SELECT 'PROXY', PROXY || '-' || CLIENT, 'DBA'
   FROM DBA_PROXIES
   WHERE CLIENT IN (SELECT GRANTEE FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE = 'DBA')
-)
-SELECT '<tr class="' ||
-  CASE
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.4.4</td>' ||
-  '<td>Ensure DBA Is Revoked from Unauthorized GRANTEE (Scored) - ' || 
+    AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
+),
+dba_env_info AS (
+  SELECT 
     CASE 
       WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
       THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
       ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
+),
+dba_access_summary AS (
+  SELECT 
+    COUNT(*) AS access_count,
+    LISTAGG(PATH || ':' || GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) AS access_list
+  FROM dba_access
+)
+SELECT '<tr class="' ||
+  CASE
+    WHEN s.access_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.4.4</td>' ||
+  '<td>Ensure DBA Is Revoked from Unauthorized GRANTEE (Scored) - ' || e.env_type || '</td>' ||
+  '<td>' || CASE WHEN s.access_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' ||
-    CASE WHEN COUNT(*) > 0 THEN
-      LISTAGG(PATH || ':' || GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN s.access_count > 0 THEN s.access_list
     ELSE 'No unauthorized DBA access found'
     END || '</td>' ||
   '<td>Only SYS and SYSTEM should have DBA role</td>' ||
   '<td class="remediation">REVOKE DBA FROM &lt;grantee&gt;; or ALTER USER &lt;proxy&gt; REVOKE CONNECT THROUGH &lt;client&gt;;</td>' ||
   '</tr>'
-FROM dba_access
-WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
-);
+FROM dba_access_summary s CROSS JOIN dba_env_info e;
 
 -- 4.4.4 DBA - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
 WITH dba_access_cdb AS (
@@ -5682,12 +6010,18 @@ WITH dba_access_cdb AS (
   FROM CDB_ROLE_PRIVS A
   WHERE A.GRANTED_ROLE='DBA'
   AND A.GRANTEE NOT IN ('SYS', 'SYSTEM')
+    AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
   UNION
   -- Proxy access to DBA users
   SELECT 'PROXY', A.PROXY || '-' || A.CLIENT, 'DBA',
     DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS CON
   FROM CDB_PROXIES A
   WHERE A.CLIENT IN (SELECT B.GRANTEE FROM CDB_ROLE_PRIVS B WHERE B.GRANTED_ROLE = 'DBA' AND A.CON_ID = B.CON_ID)
+    AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
 ),
 dba_access_summary AS (
   SELECT 
@@ -5713,10 +6047,117 @@ SELECT '<tr class="' ||
   '<td>Only SYS and SYSTEM should have DBA role</td>' ||
   '<td class="remediation">REVOKE DBA FROM &lt;grantee&gt;; or ALTER USER &lt;proxy&gt; REVOKE CONNECT THROUGH &lt;client&gt;;</td>' ||
   '</tr>'
-FROM dba_access_summary
-WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+FROM dba_access_summary;
+
+-- 4.4.5 AUDIT_ADMIN - Oracle 18c+ Non-multitenant OR when running from PDB
+WITH audit_admin_access AS (
+  -- Direct AUDIT_ADMIN role grants
+  SELECT 'GRANT' AS PATH, GRANTEE, GRANTED_ROLE
+  FROM DBA_ROLE_PRIVS
+  WHERE GRANTED_ROLE = 'AUDIT_ADMIN' 
+  AND GRANTEE NOT IN ('SYS', 'SYSTEM')
+    AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
+  UNION
+  -- Proxy access to AUDIT_ADMIN users
+  SELECT 'PROXY', PROXY || '-' || CLIENT, 'AUDIT_ADMIN'
+  FROM DBA_PROXIES
+  WHERE CLIENT IN (SELECT GRANTEE FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE = 'AUDIT_ADMIN')
+    AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
+),
+environment_info AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '18c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '18c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+),
+audit_admin_summary AS (
+  SELECT 
+    COUNT(*) AS access_count,
+    LISTAGG(PATH || ':' || GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) AS access_list
+  FROM audit_admin_access
+)
+SELECT '<tr class="' ||
+  CASE
+    WHEN s.access_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.4.5</td>' ||
+  '<td>Ensure AUDIT_ADMIN Is Revoked from Unauthorized GRANTEE (Scored) - ' || e.env_type || '</td>' ||
+  '<td>' || CASE WHEN s.access_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN s.access_count > 0 THEN s.access_list
+    ELSE 'No unauthorized AUDIT_ADMIN access found'
+    END || '</td>' ||
+  '<td>Only authorized system users should have AUDIT_ADMIN role</td>' ||
+  '<td class="remediation">REVOKE AUDIT_ADMIN FROM &lt;grantee&gt;; or ALTER USER &lt;proxy&gt; REVOKE CONNECT THROUGH &lt;client&gt;;</td>' ||
+  '</tr>'
+FROM audit_admin_summary s CROSS JOIN environment_info e;
+
+-- 4.4.5 AUDIT_ADMIN - Oracle 18c+ Multitenant CDB (when running from CDB$ROOT)
+WITH audit_admin_access_cdb AS (
+  -- Direct AUDIT_ADMIN role grants
+  SELECT 'GRANT' AS PATH, A.GRANTEE, A.GRANTED_ROLE,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS CON
+  FROM CDB_ROLE_PRIVS A
+  WHERE A.GRANTED_ROLE='AUDIT_ADMIN'
+  AND A.GRANTEE NOT IN ('SYS', 'SYSTEM')
+    AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+  UNION
+  -- Proxy access to AUDIT_ADMIN users
+  SELECT 'PROXY', A.PROXY || '-' || A.CLIENT, 'AUDIT_ADMIN',
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS CON
+  FROM CDB_PROXIES A
+  WHERE A.CLIENT IN (SELECT B.GRANTEE FROM CDB_ROLE_PRIVS B WHERE B.GRANTED_ROLE = 'AUDIT_ADMIN' AND A.CON_ID = B.CON_ID)
+    AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+),
+audit_admin_access_summary AS (
+  SELECT 
+    CON AS container_name,
+    COUNT(*) AS access_count,
+    LISTAGG(PATH || ':' || GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) AS access_list
+  FROM audit_admin_access_cdb
+  GROUP BY CON
+  ORDER BY CON
+)
+SELECT '<tr class="' ||
+  CASE
+    WHEN access_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.4.5</td>' ||
+  '<td>Ensure AUDIT_ADMIN Is Revoked from Unauthorized GRANTEE (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN access_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN access_count > 0 THEN access_list
+    ELSE 'No unauthorized AUDIT_ADMIN access found in ' || container_name
+    END || '</td>' ||
+  '<td>Only authorized system users should have AUDIT_ADMIN role</td>' ||
+  '<td class="remediation">REVOKE AUDIT_ADMIN FROM &lt;grantee&gt;; or ALTER USER &lt;proxy&gt; REVOKE CONNECT THROUGH &lt;client&gt;;</td>' ||
+  '</tr>'
+FROM audit_admin_access_summary;
 
 PROMPT </table>
 
@@ -5750,36 +6191,56 @@ AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 -- 4.5.1 ALL on AUD$ - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.5.1</td>' ||
-  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on AUD$ (Scored) - ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
-      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on AUD$ (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN privilege_list
     ELSE 'No unauthorized privileges found'
     END || '</td>' ||
   '<td>No unauthorized privileges should be granted on SYS.AUD$</td>' ||
   '<td class="remediation">REVOKE ALL ON SYS.AUD$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE TABLE_NAME='AUD$'
-AND OWNER = 'SYS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
-AND (
-  -- Non-multitenant database
-  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-  OR 
-  -- Running from PDB (not CDB$ROOT)
-  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_TAB_PRIVS 
+     WHERE TABLE_NAME='AUD$'
+       AND OWNER = 'SYS'
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_TAB_PRIVS 
+     WHERE TABLE_NAME='AUD$'
+       AND OWNER = 'SYS'
+       AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )) AS privilege_list,
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+  WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND (
+      -- Non-multitenant database
+      NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+      OR 
+      -- Running from PDB (not CDB$ROOT)
+      (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+       (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+    )
 );
 
 -- 4.5.1 ALL on AUD$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -5813,47 +6274,67 @@ WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
 AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
 AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
 
--- 4.5.2 ALL on USER_HISTORY$ - Oracle 11g
+-- 4.5.2 ALL on USER_HISTORY$ - Oracle 11g and 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.5.2</td>' ||
-  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on USER_HISTORY$ (Scored) - ' ||
-    CASE 
-      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on USER_HISTORY$ (Scored) - ' || version_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN privilege_list
     ELSE 'No unauthorized privileges found'
     END || '</td>' ||
   '<td>No unauthorized privileges should be granted on USER_HISTORY$</td>' ||
   '<td class="remediation">REVOKE ALL ON USER_HISTORY$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE TABLE_NAME='USER_HISTORY$'
-AND (
-  -- Oracle 11g: no grantee filtering
-  (SELECT version FROM v$instance) LIKE '11.%'
-  OR
-  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
-  ((SELECT version FROM v$instance) NOT LIKE '11.%'
-   AND OWNER = 'SYS'
-   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-   AND (
-     -- Non-multitenant database
-     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-     OR 
-     -- Running from PDB (not CDB$ROOT)
-     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
-   )
-  )
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_TAB_PRIVS 
+     WHERE TABLE_NAME='USER_HISTORY$'
+       AND (
+         -- Oracle 11g: no grantee filtering
+         (SELECT version FROM v$instance) LIKE '11.%'
+         OR
+         -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+         ((SELECT version FROM v$instance) NOT LIKE '11.%'
+          AND OWNER = 'SYS'
+          AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+          AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+          AND (
+            NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+            OR 
+            (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+             (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+          )
+         )
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_TAB_PRIVS 
+     WHERE TABLE_NAME='USER_HISTORY$'
+       AND (
+         -- Oracle 11g: no grantee filtering
+         (SELECT version FROM v$instance) LIKE '11.%'
+         OR
+         -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+         ((SELECT version FROM v$instance) NOT LIKE '11.%'
+          AND OWNER = 'SYS'
+          AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+          AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+          AND (
+            NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+            OR 
+            (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+             (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+          )
+         )
+       )) AS privilege_list,
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END AS version_type
+  FROM DUAL
 );
 
 -- 4.5.2 ALL on USER_HISTORY$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -5892,44 +6373,64 @@ AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
 -- 4.5.3 ALL on LINK$ - Oracle 11g and 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.5.3</td>' ||
-  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on LINK$ (Scored) - ' ||
-    CASE 
-      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on LINK$ (Scored) - ' || version_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN privilege_list
     ELSE 'No unauthorized privileges found'
     END || '</td>' ||
   '<td>No unauthorized privileges should be granted on LINK$</td>' ||
   '<td class="remediation">REVOKE ALL ON LINK$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE TABLE_NAME='LINK$'
-AND (
-  -- Oracle 11g: no grantee filtering
-  (SELECT version FROM v$instance) LIKE '11.%'
-  OR
-  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
-  ((SELECT version FROM v$instance) NOT LIKE '11.%'
-   AND OWNER = 'SYS'
-   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-   AND (
-     -- Non-multitenant database
-     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-     OR 
-     -- Running from PDB (not CDB$ROOT)
-     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
-   )
-  )
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_TAB_PRIVS 
+     WHERE TABLE_NAME='LINK$'
+       AND (
+         -- Oracle 11g: no grantee filtering
+         (SELECT version FROM v$instance) LIKE '11.%'
+         OR
+         -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+         ((SELECT version FROM v$instance) NOT LIKE '11.%'
+          AND OWNER = 'SYS'
+          AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+          AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+          AND (
+            NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+            OR 
+            (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+             (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+          )
+         )
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_TAB_PRIVS 
+     WHERE TABLE_NAME='LINK$'
+       AND (
+         -- Oracle 11g: no grantee filtering
+         (SELECT version FROM v$instance) LIKE '11.%'
+         OR
+         -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+         ((SELECT version FROM v$instance) NOT LIKE '11.%'
+          AND OWNER = 'SYS'
+          AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+          AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+          AND (
+            NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+            OR 
+            (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+             (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+          )
+         )
+       )) AS privilege_list,
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END AS version_type
+  FROM DUAL
 );
 
 -- 4.5.3 ALL on LINK$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
@@ -5966,50 +6467,77 @@ AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
 AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
 
 -- 4.5.4 ALL on SYS.USER$ - Oracle 11g and 12c+ Non-multitenant/PDB
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.5.4</td>' ||
-  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on SYS.USER$ (Scored) - ' ||
+WITH user_privileges AS (
+  SELECT GRANTEE, PRIVILEGE
+  FROM DBA_TAB_PRIVS 
+  WHERE TABLE_NAME='USER$'
+    AND (
+      -- Oracle 11g: use hardcoded exclusion list
+      ((SELECT version FROM v$instance) LIKE '11.%'
+       AND GRANTEE NOT IN ('CTXSYS','XDB','APEX_030200','APEX_040000','APEX_040100','APEX_040200','ORACLE_OCM'))
+      OR
+      -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+      ((SELECT version FROM v$instance) NOT LIKE '11.%'
+       AND OWNER = 'SYS'
+       AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+       AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+       AND (
+         NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+         OR 
+         (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+          (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+       )
+      )
+    )
+),
+version_info AS (
+  SELECT 
     CASE 
       WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
       ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+    END AS version_type
+  FROM DUAL
+),
+user_priv_summary AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE) AS privilege_list
+  FROM user_privileges
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN s.priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.4</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on SYS.USER$ (Scored) - ' || v.version_type || '</td>' ||
+  '<td>' || CASE WHEN s.priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN s.priv_count > 0 THEN s.privilege_list
     ELSE 'No unauthorized privileges found'
     END || '</td>' ||
   '<td>No unauthorized privileges should be granted on SYS.USER$</td>' ||
   '<td class="remediation">REVOKE ALL ON SYS.USER$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE TABLE_NAME='USER$'
-AND (
-  -- Oracle 11g: use hardcoded exclusion list
-  ((SELECT version FROM v$instance) LIKE '11.%'
-   AND GRANTEE NOT IN ('CTXSYS','XDB','APEX_030200','APEX_040000','APEX_040100','APEX_040200','ORACLE_OCM'))
-  OR
-  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
-  ((SELECT version FROM v$instance) NOT LIKE '11.%'
-   AND OWNER = 'SYS'
-   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-   AND (
-     -- Non-multitenant database
-     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-     OR 
-     -- Running from PDB (not CDB$ROOT)
-     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
-   )
-  )
-);
+FROM user_priv_summary s CROSS JOIN version_info v;
 
 -- 4.5.4 ALL on SYS.USER$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+WITH user_priv_cdb AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='USER$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+    AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
 SELECT '<tr class="' ||
   CASE
     WHEN priv_count = 0 THEN 'pass'
@@ -6025,72 +6553,86 @@ SELECT '<tr class="' ||
   '<td>No unauthorized privileges should be granted on SYS.USER$</td>' ||
   '<td class="remediation">REVOKE ALL ON SYS.USER$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM (
-  SELECT 
-    COUNT(*) AS priv_count,
-    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
-    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
-  FROM CDB_TAB_PRIVS A
-  WHERE A.TABLE_NAME='USER$'
-  AND A.OWNER = 'SYS'
-  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-  GROUP BY A.CON_ID
-  ORDER BY A.CON_ID
-)
-WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
-AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+FROM user_priv_cdb;
 
 -- 4.5.5 ALL on DBA_% - Oracle 11g and 12c+ Non-multitenant/PDB
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.5.5</td>' ||
-  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on DBA_% (Scored) - ' ||
+WITH dba_privileges AS (
+  SELECT TABLE_NAME, GRANTEE, PRIVILEGE
+  FROM DBA_TAB_PRIVS
+  WHERE (
+    -- Oracle 11g: use specified exclusion list
+    ((SELECT version FROM v$instance) LIKE '11.%'
+     AND TABLE_NAME LIKE 'DBA_%'
+     AND GRANTEE NOT IN ('APPQOSSYS','AQ_ADMINISTRATOR_ROLE','CTXSYS','EXFSYS','MDSYS',
+     'OLAP_XS_ADMIN','OLAPSYS','ORDSYS','OWB$CLIENT','OWBSYS','SELECT_CATALOG_ROLE',
+     'WM_ADMIN_ROLE','WMSYS','XDBADMIN','LBACSYS','ADM_PARALLEL_EXECUTE_TASK','CISSCANROLE')
+     AND NOT REGEXP_LIKE(GRANTEE,'^APEX_0[3-9][0-9][0-9][0-9][0-9]$'))
+    OR
+    -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+    ((SELECT version FROM v$instance) NOT LIKE '11.%'
+     AND TABLE_NAME LIKE 'DBA\_%' ESCAPE '\'
+     AND OWNER = 'SYS'
+     AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+     AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+     AND (
+       -- Non-multitenant database
+       NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+       OR 
+       -- Running from PDB (not CDB$ROOT)
+       (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+        (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+     )
+    )
+  )
+),
+dba_version_info AS (
+  SELECT 
     CASE 
       WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
       ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+    END AS version_type
+  FROM DUAL
+),
+dba_priv_summary AS (
+  SELECT 
+    COUNT(*) AS priv_count
+  FROM dba_privileges
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN s.priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.5</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on DBA_% (Scored) - ' || v.version_type || '</td>' ||
+  '<td>' || CASE WHEN s.priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      'Found ' || COUNT(*) || ' unauthorized privileges on DBA views'
+    CASE WHEN s.priv_count > 0 THEN 
+      'Found ' || s.priv_count || ' unauthorized privileges on DBA views'
     ELSE 'No unauthorized privileges found'
     END || '</td>' ||
   '<td>No unauthorized privileges should be granted on DBA_% views</td>' ||
   '<td class="remediation">REVOKE ALL ON &lt;dba_view&gt; FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE (
-  -- Oracle 11g: use specified exclusion list
-  ((SELECT version FROM v$instance) LIKE '11.%'
-   AND TABLE_NAME LIKE 'DBA_%'
-   AND GRANTEE NOT IN ('APPQOSSYS','AQ_ADMINISTRATOR_ROLE','CTXSYS','EXFSYS','MDSYS',
-   'OLAP_XS_ADMIN','OLAPSYS','ORDSYS','OWB$CLIENT','OWBSYS','SELECT_CATALOG_ROLE',
-   'WM_ADMIN_ROLE','WMSYS','XDBADMIN','LBACSYS','ADM_PARALLEL_EXECUTE_TASK','CISSCANROLE')
-   AND NOT REGEXP_LIKE(GRANTEE,'^APEX_0[3-9][0-9][0-9][0-9][0-9]$'))
-  OR
-  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
-  ((SELECT version FROM v$instance) NOT LIKE '11.%'
-   AND TABLE_NAME LIKE 'DBA\_%' ESCAPE '\'
-   AND OWNER = 'SYS'
-   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-   AND (
-     -- Non-multitenant database
-     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-     OR 
-     -- Running from PDB (not CDB$ROOT)
-     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
-   )
-  )
-);
+FROM dba_priv_summary s CROSS JOIN dba_version_info v;
 
 -- 4.5.5 ALL on DBA_% - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+WITH dba_priv_cdb AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.TABLE_NAME, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME LIKE 'DBA\_%' ESCAPE '\'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+    AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
 SELECT '<tr class="' ||
   CASE
     WHEN priv_count = 0 THEN 'pass'
@@ -6106,67 +6648,81 @@ SELECT '<tr class="' ||
   '<td>No unauthorized privileges should be granted on DBA_% views</td>' ||
   '<td class="remediation">REVOKE ALL ON &lt;dba_view&gt; FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM (
-  SELECT 
-    COUNT(*) AS priv_count,
-    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
-    LISTAGG(A.GRANTEE || ':' || A.TABLE_NAME, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
-  FROM CDB_TAB_PRIVS A
-  WHERE A.TABLE_NAME LIKE 'DBA\_%' ESCAPE '\'
-  AND A.OWNER = 'SYS'
-  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
-  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
-  GROUP BY A.CON_ID
-  ORDER BY A.CON_ID
-)
-WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
-AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+FROM dba_priv_cdb;
 
 -- 4.5.6 ALL on SYS.SCHEDULER$_CREDENTIAL - Oracle 11g and 12c+ Non-multitenant/PDB
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.5.6</td>' ||
-  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on SYS.SCHEDULER$_CREDENTIAL (Scored) - ' ||
+WITH scheduler_privileges AS (
+  SELECT GRANTEE, PRIVILEGE
+  FROM DBA_TAB_PRIVS
+  WHERE TABLE_NAME='SCHEDULER$_CREDENTIAL'
+  AND (
+    -- Oracle 11g: no grantee filtering
+    (SELECT version FROM v$instance) LIKE '11.%'
+    OR
+    -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+    ((SELECT version FROM v$instance) NOT LIKE '11.%'
+     AND OWNER = 'SYS'
+     AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+     AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+     AND (
+       -- Non-multitenant database
+       NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+       OR 
+       -- Running from PDB (not CDB$ROOT)
+       (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+        (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+     )
+    )
+  )
+),
+scheduler_version_info AS (
+  SELECT 
     CASE 
       WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
       ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+    END AS version_type
+  FROM DUAL
+),
+scheduler_priv_summary AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE) AS privilege_list
+  FROM scheduler_privileges
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN s.priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.5.6</td>' ||
+  '<td>Ensure ALL Is Revoked from Unauthorized GRANTEE on SYS.SCHEDULER$_CREDENTIAL (Scored) - ' || v.version_type || '</td>' ||
+  '<td>' || CASE WHEN s.priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN s.priv_count > 0 THEN s.privilege_list
     ELSE 'No unauthorized privileges found'
     END || '</td>' ||
   '<td>No unauthorized privileges should be granted on SYS.SCHEDULER$_CREDENTIAL</td>' ||
   '<td class="remediation">REVOKE ALL ON SYS.SCHEDULER$_CREDENTIAL FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_TAB_PRIVS
-WHERE TABLE_NAME='SCHEDULER$_CREDENTIAL'
-AND (
-  -- Oracle 11g: no grantee filtering
-  (SELECT version FROM v$instance) LIKE '11.%'
-  OR
-  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
-  ((SELECT version FROM v$instance) NOT LIKE '11.%'
-   AND OWNER = 'SYS'
-   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-   AND (
-     -- Non-multitenant database
-     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-     OR 
-     -- Running from PDB (not CDB$ROOT)
-     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
-   )
-  )
-);
+FROM scheduler_priv_summary s CROSS JOIN scheduler_version_info v;
 
 -- 4.5.6 ALL on SYS.SCHEDULER$_CREDENTIAL - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+WITH scheduler_priv_cdb AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='SCHEDULER$_CREDENTIAL'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+    AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
 SELECT '<tr class="' ||
   CASE
     WHEN priv_count = 0 THEN 'pass'
@@ -6182,22 +6738,7 @@ SELECT '<tr class="' ||
   '<td>No unauthorized privileges should be granted on SYS.SCHEDULER$_CREDENTIAL</td>' ||
   '<td class="remediation">REVOKE ALL ON SYS.SCHEDULER$_CREDENTIAL FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM (
-  SELECT 
-    COUNT(*) AS priv_count,
-    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
-    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
-  FROM CDB_TAB_PRIVS A
-  WHERE A.TABLE_NAME='SCHEDULER$_CREDENTIAL'
-  AND A.OWNER = 'SYS'
-  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-  GROUP BY A.CON_ID
-  ORDER BY A.CON_ID
-)
-WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
-AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+FROM scheduler_priv_cdb;
 
 -- 4.5.6a ALL on CDB_LOCAL_ADMINAUTH$ - Oracle 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
@@ -6232,6 +6773,22 @@ AND (
 );
 
 -- 4.5.6a ALL on CDB_LOCAL_ADMINAUTH$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+WITH cdb_admin_priv_cdb AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='CDB_LOCAL_ADMINAUTH$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+    AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
 SELECT '<tr class="' ||
   CASE
     WHEN priv_count = 0 THEN 'pass'
@@ -6247,22 +6804,7 @@ SELECT '<tr class="' ||
   '<td>No unauthorized privileges should be granted on CDB_LOCAL_ADMINAUTH$</td>' ||
   '<td class="remediation">REVOKE ALL ON CDB_LOCAL_ADMINAUTH$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM (
-  SELECT 
-    COUNT(*) AS priv_count,
-    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
-    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
-  FROM CDB_TAB_PRIVS A
-  WHERE A.TABLE_NAME='CDB_LOCAL_ADMINAUTH$'
-  AND A.OWNER = 'SYS'
-  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-  GROUP BY A.CON_ID
-  ORDER BY A.CON_ID
-)
-WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
-AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+FROM cdb_admin_priv_cdb;
 
 -- 4.5.6b ALL on DEFAULT_PWD$ - Oracle 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
@@ -6297,6 +6839,22 @@ AND (
 );
 
 -- 4.5.6b ALL on DEFAULT_PWD$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+WITH default_pwd_priv_cdb AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='DEFAULT_PWD$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+    AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
 SELECT '<tr class="' ||
   CASE
     WHEN priv_count = 0 THEN 'pass'
@@ -6312,22 +6870,7 @@ SELECT '<tr class="' ||
   '<td>No unauthorized privileges should be granted on DEFAULT_PWD$</td>' ||
   '<td class="remediation">REVOKE ALL ON DEFAULT_PWD$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM (
-  SELECT 
-    COUNT(*) AS priv_count,
-    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
-    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
-  FROM CDB_TAB_PRIVS A
-  WHERE A.TABLE_NAME='DEFAULT_PWD$'
-  AND A.OWNER = 'SYS'
-  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-  GROUP BY A.CON_ID
-  ORDER BY A.CON_ID
-)
-WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
-AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+FROM default_pwd_priv_cdb;
 
 -- 4.5.6c ALL on ENC$ - Oracle 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
@@ -6362,6 +6905,22 @@ AND (
 );
 
 -- 4.5.6c ALL on ENC$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+WITH enc_priv_cdb AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='ENC$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+    AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
 SELECT '<tr class="' ||
   CASE
     WHEN priv_count = 0 THEN 'pass'
@@ -6377,22 +6936,7 @@ SELECT '<tr class="' ||
   '<td>No unauthorized privileges should be granted on ENC$</td>' ||
   '<td class="remediation">REVOKE ALL ON ENC$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM (
-  SELECT 
-    COUNT(*) AS priv_count,
-    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
-    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
-  FROM CDB_TAB_PRIVS A
-  WHERE A.TABLE_NAME='ENC$'
-  AND A.OWNER = 'SYS'
-  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-  GROUP BY A.CON_ID
-  ORDER BY A.CON_ID
-)
-WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
-AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+FROM enc_priv_cdb;
 
 -- 4.5.6d ALL on HISTGRM$ - Oracle 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
@@ -6427,6 +6971,22 @@ AND (
 );
 
 -- 4.5.6d ALL on HISTGRM$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+WITH histgrm_priv_cdb AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='HISTGRM$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+    AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
 SELECT '<tr class="' ||
   CASE
     WHEN priv_count = 0 THEN 'pass'
@@ -6442,22 +7002,7 @@ SELECT '<tr class="' ||
   '<td>No unauthorized privileges should be granted on HISTGRM$</td>' ||
   '<td class="remediation">REVOKE ALL ON HISTGRM$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM (
-  SELECT 
-    COUNT(*) AS priv_count,
-    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
-    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
-  FROM CDB_TAB_PRIVS A
-  WHERE A.TABLE_NAME='HISTGRM$'
-  AND A.OWNER = 'SYS'
-  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-  GROUP BY A.CON_ID
-  ORDER BY A.CON_ID
-)
-WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
-AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+FROM histgrm_priv_cdb;
 
 -- 4.5.6e ALL on HIST_HEAD$ - Oracle 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
@@ -6492,6 +7037,22 @@ AND (
 );
 
 -- 4.5.6e ALL on HIST_HEAD$ - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+WITH hist_head_priv_cdb AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_TAB_PRIVS A
+  WHERE A.TABLE_NAME='HIST_HEAD$'
+  AND A.OWNER = 'SYS'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+    AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
 SELECT '<tr class="' ||
   CASE
     WHEN priv_count = 0 THEN 'pass'
@@ -6507,22 +7068,7 @@ SELECT '<tr class="' ||
   '<td>No unauthorized privileges should be granted on HIST_HEAD$</td>' ||
   '<td class="remediation">REVOKE ALL ON HIST_HEAD$ FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM (
-  SELECT 
-    COUNT(*) AS priv_count,
-    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
-    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
-  FROM CDB_TAB_PRIVS A
-  WHERE A.TABLE_NAME='HIST_HEAD$'
-  AND A.OWNER = 'SYS'
-  AND A.GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-  AND A.GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-  GROUP BY A.CON_ID
-  ORDER BY A.CON_ID
-)
-WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
-AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+FROM hist_head_priv_cdb;
 
 -- 4.5.6f ALL on PDB_SYNC$ - Oracle 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
@@ -6750,55 +7296,83 @@ PROMPT <table>
 PROMPT <tr><th width="5%">Control</th><th width="35%">Title</th><th width="8%">Status</th><th width="20%">Current Value</th><th width="15%">Expected</th><th width="17%">Remediation</th></tr>
 
 -- 4.6 %ANY% Privileges - Oracle 11g and 12c+ Non-multitenant/PDB
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.6</td>' ||
-  '<td>Ensure %ANY% Is Revoked from Unauthorized GRANTEE (Scored) - ' ||
+WITH any_privileges AS (
+  SELECT GRANTEE, PRIVILEGE
+  FROM DBA_SYS_PRIVS
+  WHERE PRIVILEGE LIKE '%ANY%'
+  AND (
+    -- Oracle 11g: use specified exclusion list
+    ((SELECT version FROM v$instance) LIKE '11.%'
+     AND GRANTEE NOT IN ('AQ_ADMINISTRATOR_ROLE','DBA','DBSNMP','EXFSYS',
+     'EXP_FULL_DATABASE','IMP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE',
+     'JAVADEBUGPRIV','MDSYS','OEM_MONITOR','OLAPSYS','OLAP_DBA','ORACLE_OCM',
+     'OWB$CLIENT','OWBSYS','SCHEDULER_ADMIN','SPATIAL_CSW_ADMIN_USR',
+     'SPATIAL_WFS_ADMIN_USR','SYS','SYSMAN','SYSTEM','WMSYS','APEX_030200',
+     'APEX_040000','APEX_040100','APEX_040200','LBACSYS','OUTLN'))
+    OR
+    -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+    ((SELECT version FROM v$instance) NOT LIKE '11.%'
+     AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+     AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+     AND (
+       -- Non-multitenant database
+       NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+       OR 
+       -- Running from PDB (not CDB$ROOT)
+       (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+        (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+     )
+    )
+  )
+),
+any_version_info AS (
+  SELECT 
     CASE 
       WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
       ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+    END AS version_type
+  FROM DUAL
+),
+any_priv_summary AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE) AS privilege_list
+  FROM any_privileges
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN s.priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.6</td>' ||
+  '<td>Ensure %ANY% Is Revoked from Unauthorized GRANTEE (Scored) - ' || v.version_type || '</td>' ||
+  '<td>' || CASE WHEN s.priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      'Found ' || COUNT(*) || ' unauthorized %ANY% privileges: ' ||
-      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN s.priv_count > 0 THEN 
+      'Found ' || s.priv_count || ' unauthorized %ANY% privileges: ' || s.privilege_list
     ELSE 'No unauthorized %ANY% privileges found'
     END || '</td>' ||
   '<td>Only authorized system users should have %ANY% privileges</td>' ||
   '<td class="remediation">REVOKE &lt;ANY_PRIVILEGE&gt; FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE LIKE '%ANY%'
-AND (
-  -- Oracle 11g: use specified exclusion list
-  ((SELECT version FROM v$instance) LIKE '11.%'
-   AND GRANTEE NOT IN ('AQ_ADMINISTRATOR_ROLE','DBA','DBSNMP','EXFSYS',
-   'EXP_FULL_DATABASE','IMP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE',
-   'JAVADEBUGPRIV','MDSYS','OEM_MONITOR','OLAPSYS','OLAP_DBA','ORACLE_OCM',
-   'OWB$CLIENT','OWBSYS','SCHEDULER_ADMIN','SPATIAL_CSW_ADMIN_USR',
-   'SPATIAL_WFS_ADMIN_USR','SYS','SYSMAN','SYSTEM','WMSYS','APEX_030200',
-   'APEX_040000','APEX_040100','APEX_040200','LBACSYS','OUTLN'))
-  OR
-  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
-  ((SELECT version FROM v$instance) NOT LIKE '11.%'
-   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-   AND (
-     -- Non-multitenant database
-     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-     OR 
-     -- Running from PDB (not CDB$ROOT)
-     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
-   )
-  )
-);
+FROM any_priv_summary s CROSS JOIN any_version_info v;
 
 -- 4.6 %ANY% Privileges - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+WITH any_priv_cdb AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.PRIVILEGE LIKE '%ANY%'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+    AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
 SELECT '<tr class="' ||
   CASE
     WHEN priv_count = 0 THEN 'pass'
@@ -6814,67 +7388,81 @@ SELECT '<tr class="' ||
   '<td>Only authorized system users should have %ANY% privileges</td>' ||
   '<td class="remediation">REVOKE &lt;ANY_PRIVILEGE&gt; FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM (
-  SELECT 
-    COUNT(*) AS priv_count,
-    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
-    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
-  FROM CDB_SYS_PRIVS A
-  WHERE A.PRIVILEGE LIKE '%ANY%'
-  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
-  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
-  GROUP BY A.CON_ID
-  ORDER BY A.CON_ID
-)
-WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
-AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+FROM any_priv_cdb;
 
 -- 4.7 DBA_SYS_PRIVS with ADMIN_OPTION - Oracle 11g and 12c+ Non-multitenant/PDB
-SELECT '<tr class="' ||
-  CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
-    ELSE 'fail'
-  END || '">' ||
-  '<td>4.7</td>' ||
-  '<td>Ensure DBA_SYS_PRIVS Is Revoked from Unauthorized GRANTEE with ADMIN_OPTION=YES (Scored) - ' ||
+WITH admin_option_privileges AS (
+  SELECT GRANTEE, PRIVILEGE
+  FROM DBA_SYS_PRIVS
+  WHERE ADMIN_OPTION='YES'
+  AND (
+    -- Oracle 11g: use specified exclusion list
+    ((SELECT version FROM v$instance) LIKE '11.%'
+     AND GRANTEE NOT IN ('AQ_ADMINISTRATOR_ROLE','DBA','OWBSYS','SCHEDULER_ADMIN','SYS','SYSTEM','WMSYS','APEX_030200','APEX_040000','APEX_040100','APEX_040200'))
+    OR
+    -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
+    ((SELECT version FROM v$instance) NOT LIKE '11.%'
+     AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
+     AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
+     AND (
+       -- Non-multitenant database
+       NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+       OR 
+       -- Running from PDB (not CDB$ROOT)
+       (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+        (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+     )
+    )
+  )
+),
+admin_version_info AS (
+  SELECT 
     CASE 
       WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
       ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+    END AS version_type
+  FROM DUAL
+),
+admin_priv_summary AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE) AS privilege_list
+  FROM admin_option_privileges
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN s.priv_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>4.7</td>' ||
+  '<td>Ensure DBA_SYS_PRIVS Is Revoked from Unauthorized GRANTEE with ADMIN_OPTION=YES (Scored) - ' || v.version_type || '</td>' ||
+  '<td>' || CASE WHEN s.priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 
-      'Found ' || COUNT(*) || ' unauthorized ADMIN_OPTION privileges: ' ||
-      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN s.priv_count > 0 THEN 
+      'Found ' || s.priv_count || ' unauthorized ADMIN_OPTION privileges: ' || s.privilege_list
     ELSE 'No unauthorized ADMIN_OPTION privileges found'
     END || '</td>' ||
   '<td>Only authorized system users should have ADMIN_OPTION=YES</td>' ||
   '<td class="remediation">REVOKE &lt;privilege&gt; FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE ADMIN_OPTION='YES'
-AND (
-  -- Oracle 11g: use specified exclusion list
-  ((SELECT version FROM v$instance) LIKE '11.%'
-   AND GRANTEE NOT IN ('AQ_ADMINISTRATOR_ROLE','DBA','OWBSYS','SCHEDULER_ADMIN','SYS','SYSTEM','WMSYS','APEX_030200','APEX_040000','APEX_040100','APEX_040200'))
-  OR
-  -- Oracle 12c+ non-multitenant or PDB: filter Oracle-maintained users/roles
-  ((SELECT version FROM v$instance) NOT LIKE '11.%'
-   AND GRANTEE NOT IN (SELECT USERNAME FROM DBA_USERS WHERE ORACLE_MAINTAINED='Y')
-   AND GRANTEE NOT IN (SELECT ROLE FROM DBA_ROLES WHERE ORACLE_MAINTAINED='Y')
-   AND (
-     -- Non-multitenant database
-     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-     OR 
-     -- Running from PDB (not CDB$ROOT)
-     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
-   )
-  )
-);
+FROM admin_priv_summary s CROSS JOIN admin_version_info v;
 
 -- 4.7 DBA_SYS_PRIVS with ADMIN_OPTION - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+WITH admin_priv_cdb AS (
+  SELECT 
+    COUNT(*) AS priv_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
+  FROM CDB_SYS_PRIVS A
+  WHERE A.ADMIN_OPTION='YES'
+  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
+  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
+    AND (SELECT version FROM v$instance) NOT LIKE '11.%'
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
 SELECT '<tr class="' ||
   CASE
     WHEN priv_count = 0 THEN 'pass'
@@ -6890,21 +7478,7 @@ SELECT '<tr class="' ||
   '<td>Only authorized system users should have ADMIN_OPTION=YES</td>' ||
   '<td class="remediation">REVOKE &lt;privilege&gt; FROM &lt;grantee&gt;;</td>' ||
   '</tr>'
-FROM (
-  SELECT 
-    COUNT(*) AS priv_count,
-    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
-    LISTAGG(A.GRANTEE || ':' || A.PRIVILEGE, ', ') WITHIN GROUP (ORDER BY A.GRANTEE) AS privilege_list
-  FROM CDB_SYS_PRIVS A
-  WHERE A.ADMIN_OPTION='YES'
-  AND A.GRANTEE NOT IN (SELECT USERNAME FROM CDB_USERS WHERE ORACLE_MAINTAINED='Y')
-  AND A.GRANTEE NOT IN (SELECT ROLE FROM CDB_ROLES WHERE ORACLE_MAINTAINED='Y')
-  GROUP BY A.CON_ID
-  ORDER BY A.CON_ID
-)
-WHERE (SELECT version FROM v$instance) NOT LIKE '11.%'
-AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+FROM admin_priv_cdb;
 
 -- 4.8 Proxy Users Have Only CONNECT Privilege
 SELECT '<tr class="' ||
@@ -6930,41 +7504,67 @@ AND GRANTED_ROLE NOT IN ('CONNECT');
 -- 4.9 EXECUTE ANY PROCEDURE from OUTLN - Oracle 11g and 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.9</td>' ||
-  '<td>Ensure EXECUTE ANY PROCEDURE Is Revoked from OUTLN (Scored) - ' ||
-    CASE 
-      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure EXECUTE ANY PROCEDURE Is Revoked from OUTLN (Scored) - ' || version_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'OUTLN has EXECUTE ANY PROCEDURE: ' ||
-      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN 'OUTLN has EXECUTE ANY PROCEDURE: ' || privilege_list
     ELSE 'OUTLN does not have EXECUTE ANY PROCEDURE'
     END || '</td>' ||
   '<td>OUTLN should not have EXECUTE ANY PROCEDURE</td>' ||
   '<td class="remediation">REVOKE EXECUTE ANY PROCEDURE FROM OUTLN;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='EXECUTE ANY PROCEDURE'
-AND GRANTEE='OUTLN'
-AND (
-  -- Oracle 11g: always check
-  (SELECT version FROM v$instance) LIKE '11.%'
-  OR
-  -- Oracle 12c+ non-multitenant or PDB: avoid running in CDB$ROOT
-  ((SELECT version FROM v$instance) NOT LIKE '11.%'
-   AND (
-     -- Non-multitenant database
-     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-     OR 
-     -- Running from PDB (not CDB$ROOT)
-     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
-   )
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='EXECUTE ANY PROCEDURE'
+       AND GRANTEE='OUTLN'
+       AND (
+         (SELECT version FROM v$instance) LIKE '11.%'
+         OR
+         ((SELECT version FROM v$instance) NOT LIKE '11.%'
+          AND (
+            NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+            OR 
+            (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+             (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+          )
+         )
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='EXECUTE ANY PROCEDURE'
+       AND GRANTEE='OUTLN'
+       AND (
+         (SELECT version FROM v$instance) LIKE '11.%'
+         OR
+         ((SELECT version FROM v$instance) NOT LIKE '11.%'
+          AND (
+            NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+            OR 
+            (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+             (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+          )
+         )
+       )) AS privilege_list,
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END AS version_type
+  FROM DUAL
+  WHERE (
+    (SELECT version FROM v$instance) LIKE '11.%'
+    OR
+    ((SELECT version FROM v$instance) NOT LIKE '11.%'
+     AND (
+       NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+       OR 
+       (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+        (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+     )
+    )
   )
 );
 
@@ -7002,41 +7602,67 @@ AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
 -- 4.10 EXECUTE ANY PROCEDURE from DBSNMP - Oracle 11g and 12c+ Non-multitenant/PDB
 SELECT '<tr class="' ||
   CASE 
-    WHEN COUNT(*) = 0 THEN 'pass'
+    WHEN priv_count = 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>4.10</td>' ||
-  '<td>Ensure EXECUTE ANY PROCEDURE Is Revoked from DBSNMP (Scored) - ' ||
-    CASE 
-      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
-      ELSE '12c+ Non-MT'
-    END || '</td>' ||
-  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>Ensure EXECUTE ANY PROCEDURE Is Revoked from DBSNMP (Scored) - ' || version_type || '</td>' ||
+  '<td>' || CASE WHEN priv_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'DBSNMP has EXECUTE ANY PROCEDURE: ' ||
-      LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
+    CASE WHEN priv_count > 0 THEN 'DBSNMP has EXECUTE ANY PROCEDURE: ' || privilege_list
     ELSE 'DBSNMP does not have EXECUTE ANY PROCEDURE'
     END || '</td>' ||
   '<td>DBSNMP should not have EXECUTE ANY PROCEDURE</td>' ||
   '<td class="remediation">REVOKE EXECUTE ANY PROCEDURE FROM DBSNMP;</td>' ||
   '</tr>'
-FROM DBA_SYS_PRIVS
-WHERE PRIVILEGE='EXECUTE ANY PROCEDURE'
-AND GRANTEE='DBSNMP'
-AND (
-  -- Oracle 11g: always check
-  (SELECT version FROM v$instance) LIKE '11.%'
-  OR
-  -- Oracle 12c+ non-multitenant or PDB: avoid running in CDB$ROOT
-  ((SELECT version FROM v$instance) NOT LIKE '11.%'
-   AND (
-     -- Non-multitenant database
-     NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
-     OR 
-     -- Running from PDB (not CDB$ROOT)
-     (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
-      (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
-   )
+FROM (
+  SELECT 
+    (SELECT COUNT(*) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='EXECUTE ANY PROCEDURE'
+       AND GRANTEE='DBSNMP'
+       AND (
+         (SELECT version FROM v$instance) LIKE '11.%'
+         OR
+         ((SELECT version FROM v$instance) NOT LIKE '11.%'
+          AND (
+            NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+            OR 
+            (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+             (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+          )
+         )
+       )) AS priv_count,
+    (SELECT LISTAGG(GRANTEE || ':' || PRIVILEGE, ', ') WITHIN GROUP (ORDER BY GRANTEE) FROM DBA_SYS_PRIVS 
+     WHERE PRIVILEGE='EXECUTE ANY PROCEDURE'
+       AND GRANTEE='DBSNMP'
+       AND (
+         (SELECT version FROM v$instance) LIKE '11.%'
+         OR
+         ((SELECT version FROM v$instance) NOT LIKE '11.%'
+          AND (
+            NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+            OR 
+            (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+             (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+          )
+         )
+       )) AS privilege_list,
+    CASE 
+      WHEN (SELECT version FROM v$instance) LIKE '11.%' THEN 'Oracle 11g'
+      ELSE '12c+ Non-MT'
+    END AS version_type
+  FROM DUAL
+  WHERE (
+    (SELECT version FROM v$instance) LIKE '11.%'
+    OR
+    ((SELECT version FROM v$instance) NOT LIKE '11.%'
+     AND (
+       NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+       OR 
+       (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+        (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+     )
+    )
   )
 );
 
@@ -7163,357 +7789,1733 @@ PROMPT <h2 id="section5">5. Audit/Logging Policies and Procedures</h2>
 PROMPT <table>
 PROMPT <tr><th width="5%">Control</th><th width="35%">Title</th><th width="8%">Status</th><th width="20%">Current Value</th><th width="15%">Expected</th><th width="17%">Remediation</th></tr>
 
--- 5.1 Enable 'USER' Audit Option
+-- 5.1 Enable 'USER' Audit Option - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.1</td>' ||
-  '<td>Enable USER Audit Option (Scored)</td>' ||
+  '<td>Enable USER Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'USER audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'USER audit not enabled'
     END || '</td>' ||
   '<td>USER audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT USER;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='USER' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='USER' 
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.2 Enable 'ALTER USER' Audit Option
+-- 5.1 Enable 'USER' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
+WITH user_audit_opts AS (
+  SELECT AUDIT_OPTION, SUCCESS, FAILURE
+  FROM DBA_STMT_AUDIT_OPTS
+  WHERE USER_NAME IS NULL 
+  AND PROXY_NAME IS NULL
+  AND SUCCESS = 'BY ACCESS' 
+  AND FAILURE = 'BY ACCESS'
+  AND AUDIT_OPTION='USER'
+  AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+  AND (
+    -- Non-multitenant database
+    NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    OR 
+    -- Running from PDB (not CDB$ROOT)
+    (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+     (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+  )
+),
+user_audit_env_info AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS env_type
+  FROM DUAL
+),
+user_audit_summary AS (
+  SELECT 
+    COUNT(*) AS audit_count,
+    LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION) AS audit_details
+  FROM user_audit_opts
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN s.audit_count > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.1</td>' ||
+  '<td>Enable USER Audit Option (Scored) - ' || e.env_type || '</td>' ||
+  '<td>' || CASE WHEN s.audit_count > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN s.audit_count > 0 THEN s.audit_details
+    ELSE 'USER audit not enabled'
+    END || '</td>' ||
+  '<td>USER audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT USER;</td>' ||
+  '</tr>'
+FROM user_audit_summary s CROSS JOIN user_audit_env_info e;
+
+-- 5.1 Enable 'USER' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+WITH user_audit_cdb AS (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='USER'
+    AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+    AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.1</td>' ||
+  '<td>Enable USER Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'USER audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>USER audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT USER;</td>' ||
+  '</tr>'
+FROM user_audit_cdb;
+
+-- 5.2 Enable 'ALTER USER' Audit Option - Oracle 11g Traditional Auditing
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.2</td>' ||
-  '<td>Enable ALTER USER Audit Option (Scored)</td>' ||
+  '<td>Enable ALTER USER Audit Option (Scored) - 11g Traditional</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'ALTER USER audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'ALTER USER audit not enabled'
     END || '</td>' ||
   '<td>ALTER USER audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT ALTER USER;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='ALTER USER' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='ALTER USER'
+AND USER_NAME IS NULL
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS'
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.3 Enable 'DROP USER' Audit Option
+-- 5.2 Enable 'ALTER USER' Audit Option - Oracle 12c Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.2</td>' ||
+  '<td>Enable ALTER USER Audit Option (Scored) - 12c Unified</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUD.POLICY_NAME || ':' || AUD.AUDIT_OPTION || ' (' || AUD.AUDIT_OPTION_TYPE || ')', ', ') WITHIN GROUP (ORDER BY AUD.POLICY_NAME)
+    ELSE 'ALTER USER audit not enabled in unified policies'
+    END || '</td>' ||
+  '<td>ALTER USER audit enabled via unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS ALTER USER;</td>' ||
+  '</tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME
+AND AUD.AUDIT_OPTION = 'ALTER USER'
+AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES'
+AND ENABLED.FAILURE = 'YES'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.2 Enable 'ALTER USER' Audit Option - Oracle 18c+ Unified Auditing
+WITH VERSION_CHECK AS (
+  SELECT TO_NUMBER(SUBSTR(VERSION, 1, 2)) AS db_version FROM V$INSTANCE
+),
+CIS_AUDIT(AUDIT_OPTION) AS (
+  SELECT 'ALTER USER' FROM DUAL
+),
+AUDIT_ENABLED AS (
+  SELECT DISTINCT AUDIT_OPTION
+  FROM AUDIT_UNIFIED_POLICIES AUD
+  WHERE AUD.AUDIT_OPTION IN ('ALTER USER')
+  AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+  AND EXISTS (
+    SELECT *
+    FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+    WHERE ENABLED.SUCCESS = 'YES'
+    AND ENABLED.FAILURE = 'YES'
+    AND ENABLED.ENABLED_OPTION = 'BY USER'
+    AND ENABLED.ENTITY_NAME = 'ALL USERS'
+    AND ENABLED.POLICY_NAME = AUD.POLICY_NAME
+  )
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(E.AUDIT_OPTION) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.2</td>' ||
+  '<td>Enable ALTER USER Audit Option (Scored) - 18c+ Unified</td>' ||
+  '<td>' || CASE WHEN COUNT(E.AUDIT_OPTION) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(E.AUDIT_OPTION) > 0 THEN 
+      'ALTER USER audit enabled via unified policies'
+    ELSE 'ALTER USER audit not enabled in unified policies'
+    END || '</td>' ||
+  '<td>ALTER USER audit enabled via unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS ALTER USER;</td>' ||
+  '</tr>'
+FROM CIS_AUDIT C
+LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION
+CROSS JOIN VERSION_CHECK V
+WHERE V.db_version >= 18
+GROUP BY V.db_version;
+
+-- 5.3 Enable 'DROP USER' Audit Option - Oracle 11g Traditional Auditing
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.3</td>' ||
-  '<td>Enable DROP USER Audit Option (Scored)</td>' ||
+  '<td>Enable DROP USER Audit Option (Scored) - 11g Traditional</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'DROP USER audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'DROP USER audit not enabled'
     END || '</td>' ||
   '<td>DROP USER audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT DROP USER;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='DROP USER' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='DROP USER'
+AND USER_NAME IS NULL
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS'
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.4 Enable 'ROLE' Audit Option
+-- 5.3 Enable 'DROP USER' Audit Option - Oracle 12c Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.3</td>' ||
+  '<td>Enable DROP USER Audit Option (Scored) - 12c Unified</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUD.POLICY_NAME || ':' || AUD.AUDIT_OPTION || ' (' || AUD.AUDIT_OPTION_TYPE || ')', ', ') WITHIN GROUP (ORDER BY AUD.POLICY_NAME)
+    ELSE 'DROP USER audit not enabled in unified policies'
+    END || '</td>' ||
+  '<td>DROP USER audit enabled via unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS DROP USER;</td>' ||
+  '</tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME
+AND AUD.AUDIT_OPTION = 'DROP USER'
+AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES'
+AND ENABLED.FAILURE = 'YES'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.3 Enable 'DROP USER' Audit Option - Oracle 18c+ Unified Auditing
+WITH VERSION_CHECK AS (
+  SELECT TO_NUMBER(SUBSTR(VERSION, 1, 2)) AS db_version FROM V$INSTANCE
+),
+CIS_AUDIT(AUDIT_OPTION) AS (
+  SELECT 'DROP USER' FROM DUAL
+),
+AUDIT_ENABLED AS (
+  SELECT DISTINCT AUDIT_OPTION
+  FROM AUDIT_UNIFIED_POLICIES AUD
+  WHERE AUD.AUDIT_OPTION IN ('DROP USER')
+  AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+  AND EXISTS (
+    SELECT *
+    FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+    WHERE ENABLED.SUCCESS = 'YES'
+    AND ENABLED.FAILURE = 'YES'
+    AND ENABLED.ENABLED_OPTION = 'BY USER'
+    AND ENABLED.ENTITY_NAME = 'ALL USERS'
+    AND ENABLED.POLICY_NAME = AUD.POLICY_NAME
+  )
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(E.AUDIT_OPTION) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.3</td>' ||
+  '<td>Enable DROP USER Audit Option (Scored) - 18c+ Unified</td>' ||
+  '<td>' || CASE WHEN COUNT(E.AUDIT_OPTION) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(E.AUDIT_OPTION) > 0 THEN 
+      'DROP USER audit enabled via unified policies'
+    ELSE 'DROP USER audit not enabled in unified policies'
+    END || '</td>' ||
+  '<td>DROP USER audit enabled via unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS DROP USER;</td>' ||
+  '</tr>'
+FROM CIS_AUDIT C
+LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION
+CROSS JOIN VERSION_CHECK V
+WHERE V.db_version >= 18
+GROUP BY V.db_version;
+
+-- 5.4 Enable 'ROLE' Audit Option - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.4</td>' ||
-  '<td>Enable ROLE Audit Option (Scored)</td>' ||
+  '<td>Enable ROLE Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'ROLE audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'ROLE audit not enabled'
     END || '</td>' ||
   '<td>ROLE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT ROLE;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='ROLE' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='ROLE' 
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.5 Enable 'SYSTEM GRANT' Audit Option
+-- 5.4 Enable 'ROLE' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.4</td>' ||
+  '<td>Enable ROLE Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'ROLE audit not enabled'
+    END || '</td>' ||
+  '<td>ROLE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT ROLE;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='ROLE'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.4 Enable 'ROLE' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.4</td>' ||
+  '<td>Enable ROLE Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'ROLE audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>ROLE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT ROLE;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='ROLE'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.5 Enable 'SYSTEM GRANT' Audit Option - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.5</td>' ||
-  '<td>Enable SYSTEM GRANT Audit Option (Scored)</td>' ||
+  '<td>Enable SYSTEM GRANT Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'SYSTEM GRANT audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'SYSTEM GRANT audit not enabled'
     END || '</td>' ||
   '<td>SYSTEM GRANT audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT SYSTEM GRANT;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='SYSTEM GRANT' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='SYSTEM GRANT' 
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.6 Enable 'PROFILE' Audit Option
+-- 5.5 Enable 'SYSTEM GRANT' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.5</td>' ||
+  '<td>Enable SYSTEM GRANT Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'SYSTEM GRANT audit not enabled'
+    END || '</td>' ||
+  '<td>SYSTEM GRANT audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT SYSTEM GRANT;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='SYSTEM GRANT'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.5 Enable 'SYSTEM GRANT' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.5</td>' ||
+  '<td>Enable SYSTEM GRANT Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'SYSTEM GRANT audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>SYSTEM GRANT audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT SYSTEM GRANT;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='SYSTEM GRANT'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.6 Enable 'PROFILE' Audit Option - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.6</td>' ||
-  '<td>Enable PROFILE Audit Option (Scored)</td>' ||
+  '<td>Enable PROFILE Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PROFILE audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'PROFILE audit not enabled'
     END || '</td>' ||
   '<td>PROFILE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT PROFILE;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='PROFILE' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='PROFILE' 
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.7 Enable 'ALTER PROFILE' Audit Option
+-- 5.6 Enable 'PROFILE' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.6</td>' ||
+  '<td>Enable PROFILE Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'PROFILE audit not enabled'
+    END || '</td>' ||
+  '<td>PROFILE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT PROFILE;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='PROFILE'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.6 Enable 'PROFILE' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.6</td>' ||
+  '<td>Enable PROFILE Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'PROFILE audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>PROFILE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT PROFILE;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='PROFILE'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.7 Enable 'ALTER PROFILE' Audit Option - Oracle 11g Traditional Auditing
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.7</td>' ||
-  '<td>Enable ALTER PROFILE Audit Option (Scored)</td>' ||
+  '<td>Enable ALTER PROFILE Audit Option (Scored) - 11g Traditional</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'ALTER PROFILE audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'ALTER PROFILE audit not enabled'
     END || '</td>' ||
   '<td>ALTER PROFILE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT ALTER PROFILE;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='ALTER PROFILE' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='ALTER PROFILE'
+AND USER_NAME IS NULL
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS'
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.8 Enable 'DROP PROFILE' Audit Option
+-- 5.7 Enable 'ALTER PROFILE' Audit Option - Oracle 12c Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.7</td>' ||
+  '<td>Enable ALTER PROFILE Audit Option (Scored) - 12c Unified</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUD.POLICY_NAME || ':' || AUD.AUDIT_OPTION || ' (' || AUD.AUDIT_OPTION_TYPE || ')', ', ') WITHIN GROUP (ORDER BY AUD.POLICY_NAME)
+    ELSE 'ALTER PROFILE audit not enabled in unified policies'
+    END || '</td>' ||
+  '<td>ALTER PROFILE audit enabled via unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS ALTER PROFILE;</td>' ||
+  '</tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME
+AND AUD.AUDIT_OPTION = 'ALTER PROFILE'
+AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES'
+AND ENABLED.FAILURE = 'YES'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.7 Enable 'ALTER PROFILE' Audit Option - Oracle 18c+ Unified Auditing
+WITH VERSION_CHECK AS (
+  SELECT TO_NUMBER(SUBSTR(VERSION, 1, 2)) AS db_version FROM V$INSTANCE
+),
+CIS_AUDIT(AUDIT_OPTION) AS (
+  SELECT 'ALTER PROFILE' FROM DUAL
+),
+AUDIT_ENABLED AS (
+  SELECT DISTINCT AUDIT_OPTION
+  FROM AUDIT_UNIFIED_POLICIES AUD
+  WHERE AUD.AUDIT_OPTION IN ('ALTER PROFILE')
+  AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+  AND EXISTS (
+    SELECT *
+    FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+    WHERE ENABLED.SUCCESS = 'YES'
+    AND ENABLED.FAILURE = 'YES'
+    AND ENABLED.ENABLED_OPTION = 'BY USER'
+    AND ENABLED.ENTITY_NAME = 'ALL USERS'
+    AND ENABLED.POLICY_NAME = AUD.POLICY_NAME
+  )
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(E.AUDIT_OPTION) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.7</td>' ||
+  '<td>Enable ALTER PROFILE Audit Option (Scored) - 18c+ Unified</td>' ||
+  '<td>' || CASE WHEN COUNT(E.AUDIT_OPTION) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(E.AUDIT_OPTION) > 0 THEN 
+      'ALTER PROFILE audit enabled via unified policies'
+    ELSE 'ALTER PROFILE audit not enabled in unified policies'
+    END || '</td>' ||
+  '<td>ALTER PROFILE audit enabled via unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS ALTER PROFILE;</td>' ||
+  '</tr>'
+FROM CIS_AUDIT C
+LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION
+CROSS JOIN VERSION_CHECK V
+WHERE V.db_version >= 18
+GROUP BY V.db_version;
+
+-- 5.8 Enable 'DROP PROFILE' Audit Option - Oracle 11g Traditional Auditing
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.8</td>' ||
-  '<td>Enable DROP PROFILE Audit Option (Scored)</td>' ||
+  '<td>Enable DROP PROFILE Audit Option (Scored) - 11g Traditional</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'DROP PROFILE audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'DROP PROFILE audit not enabled'
     END || '</td>' ||
   '<td>DROP PROFILE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT DROP PROFILE;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='DROP PROFILE' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='DROP PROFILE'
+AND USER_NAME IS NULL
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS'
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.9 Enable 'DATABASE LINK' Audit Option
+-- 5.8 Enable 'DROP PROFILE' Audit Option - Oracle 12c Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.8</td>' ||
+  '<td>Enable DROP PROFILE Audit Option (Scored) - 12c Unified</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUD.POLICY_NAME || ':' || AUD.AUDIT_OPTION || ' (' || AUD.AUDIT_OPTION_TYPE || ')', ', ') WITHIN GROUP (ORDER BY AUD.POLICY_NAME)
+    ELSE 'DROP PROFILE audit not enabled in unified policies'
+    END || '</td>' ||
+  '<td>DROP PROFILE audit enabled via unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS DROP PROFILE;</td>' ||
+  '</tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME
+AND AUD.AUDIT_OPTION = 'DROP PROFILE'
+AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES'
+AND ENABLED.FAILURE = 'YES'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.8 Enable 'DROP PROFILE' Audit Option - Oracle 18c+ Unified Auditing
+WITH VERSION_CHECK AS (
+  SELECT TO_NUMBER(SUBSTR(VERSION, 1, 2)) AS db_version FROM V$INSTANCE
+),
+CIS_AUDIT(AUDIT_OPTION) AS (
+  SELECT 'DROP PROFILE' FROM DUAL
+),
+AUDIT_ENABLED AS (
+  SELECT DISTINCT AUDIT_OPTION
+  FROM AUDIT_UNIFIED_POLICIES AUD
+  WHERE AUD.AUDIT_OPTION IN ('DROP PROFILE')
+  AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+  AND EXISTS (
+    SELECT *
+    FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+    WHERE ENABLED.SUCCESS = 'YES'
+    AND ENABLED.FAILURE = 'YES'
+    AND ENABLED.ENABLED_OPTION = 'BY USER'
+    AND ENABLED.ENTITY_NAME = 'ALL USERS'
+    AND ENABLED.POLICY_NAME = AUD.POLICY_NAME
+  )
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(E.AUDIT_OPTION) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.8</td>' ||
+  '<td>Enable DROP PROFILE Audit Option (Scored) - 18c+ Unified</td>' ||
+  '<td>' || CASE WHEN COUNT(E.AUDIT_OPTION) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(E.AUDIT_OPTION) > 0 THEN 
+      'DROP PROFILE audit enabled via unified policies'
+    ELSE 'DROP PROFILE audit not enabled in unified policies'
+    END || '</td>' ||
+  '<td>DROP PROFILE audit enabled via unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS DROP PROFILE;</td>' ||
+  '</tr>'
+FROM CIS_AUDIT C
+LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION
+CROSS JOIN VERSION_CHECK V
+WHERE V.db_version >= 18
+GROUP BY V.db_version;
+
+-- 5.9 Enable 'DATABASE LINK' Audit Option - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.9</td>' ||
-  '<td>Enable DATABASE LINK Audit Option (Scored)</td>' ||
+  '<td>Enable DATABASE LINK Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'DATABASE LINK audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'DATABASE LINK audit not enabled'
     END || '</td>' ||
   '<td>DATABASE LINK audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT DATABASE LINK;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='DATABASE LINK' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='DATABASE LINK' 
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.10 Enable 'PUBLIC DATABASE LINK' Audit Option
+-- 5.9 Enable 'DATABASE LINK' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.9</td>' ||
+  '<td>Enable DATABASE LINK Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'DATABASE LINK audit not enabled'
+    END || '</td>' ||
+  '<td>DATABASE LINK audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT DATABASE LINK;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='DATABASE LINK'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.9 Enable 'DATABASE LINK' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.9</td>' ||
+  '<td>Enable DATABASE LINK Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'DATABASE LINK audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>DATABASE LINK audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT DATABASE LINK;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='DATABASE LINK'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.10 Enable 'PUBLIC DATABASE LINK' Audit Option - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.10</td>' ||
-  '<td>Enable PUBLIC DATABASE LINK Audit Option (Scored)</td>' ||
+  '<td>Enable PUBLIC DATABASE LINK Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC DATABASE LINK audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'PUBLIC DATABASE LINK audit not enabled'
     END || '</td>' ||
   '<td>PUBLIC DATABASE LINK audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT PUBLIC DATABASE LINK;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='PUBLIC DATABASE LINK' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='PUBLIC DATABASE LINK' 
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.11 Enable 'PUBLIC SYNONYM' Audit Option
+-- 5.10 Enable 'PUBLIC DATABASE LINK' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.10</td>' ||
+  '<td>Enable PUBLIC DATABASE LINK Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'PUBLIC DATABASE LINK audit not enabled'
+    END || '</td>' ||
+  '<td>PUBLIC DATABASE LINK audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT PUBLIC DATABASE LINK;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='PUBLIC DATABASE LINK'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.10 Enable 'PUBLIC DATABASE LINK' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.10</td>' ||
+  '<td>Enable PUBLIC DATABASE LINK Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'PUBLIC DATABASE LINK audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>PUBLIC DATABASE LINK audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT PUBLIC DATABASE LINK;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='PUBLIC DATABASE LINK'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.11 Enable 'PUBLIC SYNONYM' Audit Option - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.11</td>' ||
-  '<td>Enable PUBLIC SYNONYM Audit Option (Scored)</td>' ||
+  '<td>Enable PUBLIC SYNONYM Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC SYNONYM audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'PUBLIC SYNONYM audit not enabled'
     END || '</td>' ||
   '<td>PUBLIC SYNONYM audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT PUBLIC SYNONYM;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='PUBLIC SYNONYM' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='PUBLIC SYNONYM' 
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.12 Enable 'SYNONYM' Audit Option
+-- 5.11 Enable 'PUBLIC SYNONYM' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.11</td>' ||
+  '<td>Enable PUBLIC SYNONYM Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'PUBLIC SYNONYM audit not enabled'
+    END || '</td>' ||
+  '<td>PUBLIC SYNONYM audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT PUBLIC SYNONYM;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='PUBLIC SYNONYM'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.11 Enable 'PUBLIC SYNONYM' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.11</td>' ||
+  '<td>Enable PUBLIC SYNONYM Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'PUBLIC SYNONYM audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>PUBLIC SYNONYM audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT PUBLIC SYNONYM;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='PUBLIC SYNONYM'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.12 Enable 'SYNONYM' Audit Option - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.12</td>' ||
-  '<td>Enable SYNONYM Audit Option (Scored)</td>' ||
+  '<td>Enable SYNONYM Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'SYNONYM audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'SYNONYM audit not enabled'
     END || '</td>' ||
   '<td>SYNONYM audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT SYNONYM;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='SYNONYM' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='SYNONYM' 
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.13 Enable 'GRANT DIRECTORY' Audit Option
+-- 5.12 Enable 'SYNONYM' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.12</td>' ||
+  '<td>Enable SYNONYM Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'SYNONYM audit not enabled'
+    END || '</td>' ||
+  '<td>SYNONYM audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT SYNONYM;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='SYNONYM'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.12 Enable 'SYNONYM' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.12</td>' ||
+  '<td>Enable SYNONYM Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'SYNONYM audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>SYNONYM audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT SYNONYM;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='SYNONYM'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.13 Enable 'GRANT DIRECTORY' Audit Option - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.13</td>' ||
-  '<td>Enable GRANT DIRECTORY Audit Option (Scored)</td>' ||
+  '<td>Enable GRANT DIRECTORY Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'GRANT DIRECTORY audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'GRANT DIRECTORY audit not enabled'
     END || '</td>' ||
   '<td>GRANT DIRECTORY audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT GRANT DIRECTORY;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='GRANT DIRECTORY' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='GRANT DIRECTORY' 
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.14 Enable 'SELECT ANY DICTIONARY' Audit Option
+-- 5.13 Enable 'DIRECTORY' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.13</td>' ||
+  '<td>Enable DIRECTORY Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'DIRECTORY audit not enabled'
+    END || '</td>' ||
+  '<td>DIRECTORY audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT DIRECTORY;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='DIRECTORY'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.13 Enable 'DIRECTORY' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.13</td>' ||
+  '<td>Enable DIRECTORY Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'DIRECTORY audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>DIRECTORY audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT DIRECTORY;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='DIRECTORY'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.14 Enable 'SELECT ANY DICTIONARY' Audit Option - Oracle 11g
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.14</td>' ||
-  '<td>Enable SELECT ANY DICTIONARY Audit Option (Scored)</td>' ||
+  '<td>Enable SELECT ANY DICTIONARY Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'SELECT ANY DICTIONARY audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'SELECT ANY DICTIONARY audit not enabled'
     END || '</td>' ||
   '<td>SELECT ANY DICTIONARY audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT SELECT ANY DICTIONARY;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='SELECT ANY DICTIONARY' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='SELECT ANY DICTIONARY' 
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.15 Enable 'GRANT ANY OBJECT PRIVILEGE' Audit Option
+-- 5.14 Enable 'SELECT ANY DICTIONARY' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.14</td>' ||
+  '<td>Enable SELECT ANY DICTIONARY Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'SELECT ANY DICTIONARY audit not enabled'
+    END || '</td>' ||
+  '<td>SELECT ANY DICTIONARY audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT SELECT ANY DICTIONARY;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='SELECT ANY DICTIONARY'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.14 Enable 'SELECT ANY DICTIONARY' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.14</td>' ||
+  '<td>Enable SELECT ANY DICTIONARY Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'SELECT ANY DICTIONARY audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>SELECT ANY DICTIONARY audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT SELECT ANY DICTIONARY;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='SELECT ANY DICTIONARY'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.15 Enable 'GRANT ANY OBJECT PRIVILEGE' Audit Option - Oracle 11g (uses DBA_PRIV_AUDIT_OPTS)
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.15</td>' ||
-  '<td>Enable GRANT ANY OBJECT PRIVILEGE Audit Option (Scored)</td>' ||
+  '<td>Enable GRANT ANY OBJECT PRIVILEGE Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'GRANT ANY OBJECT PRIVILEGE audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(PRIVILEGE || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY PRIVILEGE)
     ELSE 'GRANT ANY OBJECT PRIVILEGE audit not enabled'
     END || '</td>' ||
   '<td>GRANT ANY OBJECT PRIVILEGE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT GRANT ANY OBJECT PRIVILEGE;</td>' ||
   '</tr>'
 FROM DBA_PRIV_AUDIT_OPTS
-WHERE PRIVILEGE='GRANT ANY OBJECT PRIVILEGE' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE PRIVILEGE='GRANT ANY OBJECT PRIVILEGE' 
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.16 Enable 'GRANT ANY PRIVILEGE' Audit Option
+-- 5.15 Enable 'GRANT ANY OBJECT PRIVILEGE' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN audit_count > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.15</td>' ||
+  '<td>Enable GRANT ANY OBJECT PRIVILEGE Audit Option (Scored) - ' || env_type || '</td>' ||
+  '<td>' || CASE WHEN audit_count > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'GRANT ANY OBJECT PRIVILEGE audit not enabled'
+    END || '</td>' ||
+  '<td>GRANT ANY OBJECT PRIVILEGE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT GRANT ANY OBJECT PRIVILEGE;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    CI.container_desc AS env_type,
+    LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION) AS audit_details
+  FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+  WHERE USER_NAME IS NULL 
+  AND PROXY_NAME IS NULL
+  AND SUCCESS = 'BY ACCESS' 
+  AND FAILURE = 'BY ACCESS'
+  AND AUDIT_OPTION='GRANT ANY OBJECT PRIVILEGE'
+  AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+  AND (
+    -- Non-multitenant database
+    NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+    OR 
+    -- Running from PDB (not CDB$ROOT)
+    (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+     (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+  )
+  GROUP BY CI.container_desc
+);
+
+-- 5.15 Enable 'GRANT ANY OBJECT PRIVILEGE' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT, uses CDB_STMT_AUDIT_OPTS)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.15</td>' ||
+  '<td>Enable GRANT ANY OBJECT PRIVILEGE Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'GRANT ANY OBJECT PRIVILEGE audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>GRANT ANY OBJECT PRIVILEGE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT GRANT ANY OBJECT PRIVILEGE;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='GRANT ANY OBJECT PRIVILEGE'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.16 Enable 'GRANT ANY PRIVILEGE' Audit Option - Oracle 11g (uses DBA_PRIV_AUDIT_OPTS)
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.16</td>' ||
-  '<td>Enable GRANT ANY PRIVILEGE Audit Option (Scored)</td>' ||
+  '<td>Enable GRANT ANY PRIVILEGE Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'GRANT ANY PRIVILEGE audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(PRIVILEGE || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY PRIVILEGE)
     ELSE 'GRANT ANY PRIVILEGE audit not enabled'
     END || '</td>' ||
   '<td>GRANT ANY PRIVILEGE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT GRANT ANY PRIVILEGE;</td>' ||
   '</tr>'
 FROM DBA_PRIV_AUDIT_OPTS
-WHERE PRIVILEGE='GRANT ANY PRIVILEGE' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE PRIVILEGE='GRANT ANY PRIVILEGE' 
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.17 Enable 'DROP ANY PROCEDURE' Audit Option
+-- 5.16 Enable 'GRANT ANY PRIVILEGE' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.16</td>' ||
+  '<td>Enable GRANT ANY PRIVILEGE Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'GRANT ANY PRIVILEGE audit not enabled'
+    END || '</td>' ||
+  '<td>GRANT ANY PRIVILEGE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT GRANT ANY PRIVILEGE;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='GRANT ANY PRIVILEGE'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.16 Enable 'GRANT ANY PRIVILEGE' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT, uses CDB_STMT_AUDIT_OPTS)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.16</td>' ||
+  '<td>Enable GRANT ANY PRIVILEGE Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'GRANT ANY PRIVILEGE audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>GRANT ANY PRIVILEGE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT GRANT ANY PRIVILEGE;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='GRANT ANY PRIVILEGE'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.17 Enable 'DROP ANY PROCEDURE' Audit Option - Oracle 11g (uses DBA_STMT_AUDIT_OPTS)
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.17</td>' ||
-  '<td>Enable DROP ANY PROCEDURE Audit Option (Scored)</td>' ||
+  '<td>Enable DROP ANY PROCEDURE Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'DROP ANY PROCEDURE audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'DROP ANY PROCEDURE audit not enabled'
     END || '</td>' ||
   '<td>DROP ANY PROCEDURE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT DROP ANY PROCEDURE;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='DROP ANY PROCEDURE' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='DROP ANY PROCEDURE'
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.18 Enable 'ALL' Audit Option on 'SYS.AUD
+-- 5.17 Enable 'DROP ANY PROCEDURE' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.17</td>' ||
+  '<td>Enable DROP ANY PROCEDURE Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'DROP ANY PROCEDURE audit not enabled'
+    END || '</td>' ||
+  '<td>DROP ANY PROCEDURE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT DROP ANY PROCEDURE;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='DROP ANY PROCEDURE'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.17 Enable 'DROP ANY PROCEDURE' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT, uses CDB_STMT_AUDIT_OPTS)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.17</td>' ||
+  '<td>Enable DROP ANY PROCEDURE Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'DROP ANY PROCEDURE audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>DROP ANY PROCEDURE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT DROP ANY PROCEDURE;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='DROP ANY PROCEDURE'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.18 Enable 'ALL' Audit Option on 'SYS.AUD$' - Oracle 11g (uses DBA_OBJ_AUDIT_OPTS)
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.18</td>' ||
-  '<td>Enable ALL Audit Option on SYS.AUD$ (Scored)</td>' ||
+  '<td>Enable ALL Audit Option on SYS.AUD$ (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'ALL audit on SYS.AUD$ enabled'
+    CASE WHEN COUNT(*) > 0 THEN 'ALL audit on SYS.AUD$ enabled (ALT:' || MAX(ALT) || ', AUD:' || MAX(AUD) || ', COM:' || MAX(COM) || ', DEL:' || MAX(DEL) || ', GRA:' || MAX(GRA) || ', IND:' || MAX(IND) || ', INS:' || MAX(INS) || ', LOC:' || MAX(LOC) || ', REN:' || MAX(REN) || ', SEL:' || MAX(SEL) || ', UPD:' || MAX(UPD) || ', FBK:' || MAX(FBK) || ')'
     ELSE 'ALL audit on SYS.AUD$ not enabled'
     END || '</td>' ||
   '<td>ALL audit on SYS.AUD$ enabled (ALL operations audited)</td>' ||
@@ -7532,93 +9534,1136 @@ AND LOC='A/A'
 AND REN='A/A'
 AND SEL='A/A'
 AND UPD='A/A'
-AND FBK='A/A';
+AND FBK='A/A'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.19 Enable 'PROCEDURE' Audit Option
+-- 5.18 Enable 'ALL' Audit Option on 'SYS.AUD$' - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_OBJ_AUDIT_OPTS)
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.18</td>' ||
+  '<td>Enable ALL Audit Option on SYS.AUD$ (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'ALL audit on SYS.AUD$ enabled (ALT:' || MAX(ALT) || ', AUD:' || MAX(AUD) || ', COM:' || MAX(COM) || ', DEL:' || MAX(DEL) || ', GRA:' || MAX(GRA) || ', IND:' || MAX(IND) || ', INS:' || MAX(INS) || ', LOC:' || MAX(LOC) || ', REN:' || MAX(REN) || ', SEL:' || MAX(SEL) || ', UPD:' || MAX(UPD) || ', FBK:' || MAX(FBK) || ')'
+    ELSE 'ALL audit on SYS.AUD$ not enabled'
+    END || '</td>' ||
+  '<td>ALL audit on SYS.AUD$ enabled (ALL operations audited)</td>' ||
+  '<td class="remediation">AUDIT ALL ON SYS.AUD$ BY ACCESS;</td>' ||
+  '</tr>'
+FROM DBA_OBJ_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE OBJECT_NAME='AUD$'
+AND ALT='A/A'
+AND AUD='A/A'
+AND COM='A/A'
+AND DEL='A/A'
+AND GRA='A/A'
+AND IND='A/A'
+AND INS='A/A'
+AND LOC='A/A'
+AND REN='A/A'
+AND SEL='A/A'
+AND UPD='A/A'
+AND FBK='A/A'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.18 Enable 'ALL' Audit Option on 'SYS.AUD$' - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT, uses CDB_OBJ_AUDIT_OPTS)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.18</td>' ||
+  '<td>Enable ALL Audit Option on SYS.AUD$ (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'ALL audit on SYS.AUD$ not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>ALL audit on SYS.AUD$ enabled (ALL operations audited)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT ALL ON SYS.AUD$ BY ACCESS;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    'ALL audit on SYS.AUD$ enabled (ALT:' || A.ALT || ', AUD:' || A.AUD || ', COM:' || A.COM || ', DEL:' || A.DEL || ', GRA:' || A.GRA || ', IND:' || A.IND || ', INS:' || A.INS || ', LOC:' || A.LOC || ', REN:' || A.REN || ', SEL:' || A.SEL || ', UPD:' || A.UPD || ', FBK:' || A.FBK || ')' AS audit_details
+  FROM CDB_OBJ_AUDIT_OPTS A
+  WHERE A.OBJECT_NAME='AUD$'
+  AND A.ALT='A/A'
+  AND A.AUD='A/A'
+  AND A.COM='A/A'
+  AND A.DEL='A/A'
+  AND A.GRA='A/A'
+  AND A.IND='A/A'
+  AND A.INS='A/A'
+  AND A.LOC='A/A'
+  AND A.REN='A/A'
+  AND A.SEL='A/A'
+  AND A.UPD='A/A'
+  AND A.FBK='A/A'
+  GROUP BY A.CON_ID, A.ALT, A.AUD, A.COM, A.DEL, A.GRA, A.IND, A.INS, A.LOC, A.REN, A.SEL, A.UPD, A.FBK
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.19 Enable 'PROCEDURE' Audit Option - Oracle 11g (uses DBA_STMT_AUDIT_OPTS)
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.19</td>' ||
-  '<td>Enable PROCEDURE Audit Option (Scored)</td>' ||
+  '<td>Enable PROCEDURE Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'PROCEDURE audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'PROCEDURE audit not enabled'
     END || '</td>' ||
   '<td>PROCEDURE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT PROCEDURE;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='PROCEDURE' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='PROCEDURE'
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.20 Enable 'ALTER SYSTEM' Audit Option
+-- 5.19 Enable 'PROCEDURE' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.19</td>' ||
+  '<td>Enable PROCEDURE Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'PROCEDURE audit not enabled'
+    END || '</td>' ||
+  '<td>PROCEDURE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT PROCEDURE;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='PROCEDURE'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.19 Enable 'PROCEDURE' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT, uses CDB_STMT_AUDIT_OPTS)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.19</td>' ||
+  '<td>Enable PROCEDURE Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'PROCEDURE audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>PROCEDURE audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT PROCEDURE;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='PROCEDURE'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.20 Enable 'ALTER SYSTEM' Audit Option - Oracle 11g (uses DBA_STMT_AUDIT_OPTS)
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.20</td>' ||
-  '<td>Enable ALTER SYSTEM Audit Option (Scored)</td>' ||
+  '<td>Enable ALTER SYSTEM Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'ALTER SYSTEM audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'ALTER SYSTEM audit not enabled'
     END || '</td>' ||
   '<td>ALTER SYSTEM audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT ALTER SYSTEM;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='ALTER SYSTEM' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='ALTER SYSTEM'
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.21 Enable 'TRIGGER' Audit Option
+-- 5.20 Enable 'ALTER SYSTEM' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.20</td>' ||
+  '<td>Enable ALTER SYSTEM Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'ALTER SYSTEM audit not enabled'
+    END || '</td>' ||
+  '<td>ALTER SYSTEM audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT ALTER SYSTEM;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='ALTER SYSTEM'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.20 Enable 'ALTER SYSTEM' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT, uses CDB_STMT_AUDIT_OPTS)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.20</td>' ||
+  '<td>Enable ALTER SYSTEM Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'ALTER SYSTEM audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>ALTER SYSTEM audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT ALTER SYSTEM;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='ALTER SYSTEM'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.21 Enable 'TRIGGER' Audit Option - Oracle 11g (uses DBA_STMT_AUDIT_OPTS)
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.21</td>' ||
-  '<td>Enable TRIGGER Audit Option (Scored)</td>' ||
+  '<td>Enable TRIGGER Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'TRIGGER audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'TRIGGER audit not enabled'
     END || '</td>' ||
   '<td>TRIGGER audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT TRIGGER;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='TRIGGER' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='TRIGGER'
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
 
--- 5.22 Enable 'CREATE SESSION' Audit Option
+-- 5.21 Enable 'TRIGGER' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.21</td>' ||
+  '<td>Enable TRIGGER Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'TRIGGER audit not enabled'
+    END || '</td>' ||
+  '<td>TRIGGER audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT TRIGGER;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='TRIGGER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.21 Enable 'TRIGGER' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT, uses CDB_STMT_AUDIT_OPTS)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.21</td>' ||
+  '<td>Enable TRIGGER Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'TRIGGER audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>TRIGGER audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT TRIGGER;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='TRIGGER'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.22 Enable 'CREATE SESSION' Audit Option - Oracle 11g (uses DBA_STMT_AUDIT_OPTS)
 SELECT '<tr class="' ||
   CASE 
     WHEN COUNT(*) > 0 THEN 'pass'
     ELSE 'fail'
   END || '">' ||
   '<td>5.22</td>' ||
-  '<td>Enable CREATE SESSION Audit Option (Scored)</td>' ||
+  '<td>Enable CREATE SESSION Audit Option (Scored) - 11g</td>' ||
   '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
   '<td>' || 
-    CASE WHEN COUNT(*) > 0 THEN 'CREATE SESSION audit enabled'
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
     ELSE 'CREATE SESSION audit not enabled'
     END || '</td>' ||
   '<td>CREATE SESSION audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
   '<td class="remediation">AUDIT SESSION;</td>' ||
   '</tr>'
 FROM DBA_STMT_AUDIT_OPTS
-WHERE AUDIT_OPTION='CREATE SESSION' AND USER_NAME IS NULL AND PROXY_NAME IS NULL
-AND SUCCESS = 'BY ACCESS' AND FAILURE = 'BY ACCESS';
+WHERE AUDIT_OPTION='CREATE SESSION'
+AND USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+
+-- 5.22 Enable 'CREATE SESSION' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
+WITH CONTAINER_INFO AS (
+  SELECT 
+    CASE 
+      WHEN (SELECT CDB FROM V$DATABASE) = 'YES' AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT' 
+      THEN '12c+ PDB (' || (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) || ')'
+      ELSE '12c+ Non-MT'
+    END AS container_desc
+  FROM DUAL
+)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.22</td>' ||
+  '<td>Enable CREATE SESSION Audit Option (Scored) - ' || CI.container_desc || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG(AUDIT_OPTION || ' (SUCCESS:' || SUCCESS || ', FAILURE:' || FAILURE || ')', ', ') WITHIN GROUP (ORDER BY AUDIT_OPTION)
+    ELSE 'CREATE SESSION audit not enabled'
+    END || '</td>' ||
+  '<td>CREATE SESSION audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">AUDIT SESSION;</td>' ||
+  '</tr>'
+FROM DBA_STMT_AUDIT_OPTS, CONTAINER_INFO CI
+WHERE USER_NAME IS NULL 
+AND PROXY_NAME IS NULL
+AND SUCCESS = 'BY ACCESS' 
+AND FAILURE = 'BY ACCESS'
+AND AUDIT_OPTION='CREATE SESSION'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND (
+  -- Non-multitenant database
+  NOT EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+  OR 
+  -- Running from PDB (not CDB$ROOT)
+  (EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES') AND 
+   (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) != 'CDB$ROOT')
+)
+GROUP BY CI.container_desc;
+
+-- 5.22 Enable 'CREATE SESSION' Audit Option - Oracle 12c+ Multitenant CDB (when running from CDB$ROOT, uses CDB_STMT_AUDIT_OPTS)
+SELECT '<tr class="' ||
+  CASE
+    WHEN audit_count = 0 THEN 'fail'
+    ELSE 'pass'
+  END || '">' ||
+  '<td>5.22</td>' ||
+  '<td>Enable CREATE SESSION Audit Option (Scored) - CDB (' || container_name || ')</td>' ||
+  '<td>' || CASE WHEN audit_count = 0 THEN 'FAIL' ELSE 'PASS' END || '</td>' ||
+  '<td>' ||
+    CASE WHEN audit_count > 0 THEN audit_details
+    ELSE 'CREATE SESSION audit not enabled in ' || container_name
+    END || '</td>' ||
+  '<td>CREATE SESSION audit enabled (SUCCESS=BY ACCESS, FAILURE=BY ACCESS)</td>' ||
+  '<td class="remediation">Connect to each container: ALTER SESSION SET CONTAINER=&lt;container&gt;; AUDIT SESSION;</td>' ||
+  '</tr>'
+FROM (
+  SELECT 
+    COUNT(*) AS audit_count,
+    DECODE(A.CON_ID, 0, (SELECT NAME FROM V$DATABASE), 1, (SELECT NAME FROM V$DATABASE), (SELECT NAME FROM V$PDBS B WHERE A.CON_ID = B.CON_ID)) AS container_name,
+    LISTAGG(A.AUDIT_OPTION || ' (SUCCESS:' || A.SUCCESS || ', FAILURE:' || A.FAILURE || ')', ', ') WITHIN GROUP (ORDER BY A.AUDIT_OPTION) AS audit_details
+  FROM CDB_STMT_AUDIT_OPTS A
+  WHERE A.USER_NAME IS NULL 
+  AND A.PROXY_NAME IS NULL
+  AND A.SUCCESS = 'BY ACCESS' 
+  AND A.FAILURE = 'BY ACCESS'
+  AND A.AUDIT_OPTION='CREATE SESSION'
+  GROUP BY A.CON_ID
+  ORDER BY A.CON_ID
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 12
+AND EXISTS (SELECT 1 FROM V$DATABASE WHERE CDB = 'YES')
+AND (SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL) = 'CDB$ROOT';
+
+-- 5.23 Enable 'CREATE USER' Audit Option - Oracle 12c Unified Auditing (Note: Title suggests DATABASE LINK but spec checks CREATE USER)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.23</td>' ||
+  '<td>Enable CREATE USER Audit Option (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG('Policy: ' || AUD.POLICY_NAME || ', Option: ' || AUD.AUDIT_OPTION || ', Type: ' || AUD.AUDIT_OPTION_TYPE, '; ') WITHIN GROUP (ORDER BY AUD.POLICY_NAME)
+    ELSE 'CREATE USER unified audit policy not enabled'
+    END || '</td>' ||
+  '<td>CREATE USER audit enabled in unified audit policy (SUCCESS=YES, FAILURE=YES)</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS CREATE USER;</td>' ||
+  '</tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME
+AND AUD.AUDIT_OPTION = 'CREATE USER'
+AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES'
+AND ENABLED.FAILURE = 'YES'
+AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.23 Enable 'CREATE USER' Audit Option - Oracle 18c+ Unified Auditing (Enhanced)
+SELECT '<tr class="' ||
+  CASE 
+    WHEN missing_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.23</td>' ||
+  '<td>Enable CREATE USER Audit Option (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN missing_count = 0 THEN 'CREATE USER unified audit policy enabled'
+    ELSE 'CREATE USER unified audit policy missing (' || missing_count || ' options not configured)'
+    END || '</td>' ||
+  '<td>CREATE USER audit enabled in unified audit policy (SUCCESS=YES, FAILURE=YES)</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS CREATE USER;</td>' ||
+  '</tr>'
+FROM (
+  WITH
+  CIS_AUDIT(AUDIT_OPTION) AS
+  (
+    SELECT 'CREATE USER' AS AUDIT_OPTION FROM DUAL
+  ),
+  AUDIT_ENABLED AS
+  ( 
+    SELECT DISTINCT AUDIT_OPTION
+    FROM AUDIT_UNIFIED_POLICIES AUD
+    WHERE AUD.AUDIT_OPTION IN ('CREATE USER' )
+    AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT *
+      FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+      WHERE ENABLED.SUCCESS = 'YES'
+      AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER'
+      AND ENABLED.ENTITY_NAME = 'ALL USERS'
+      AND ENABLED.POLICY_NAME = AUD.POLICY_NAME)
+  )
+  SELECT COUNT(*) AS missing_count
+  FROM CIS_AUDIT C
+  LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION
+  WHERE E.AUDIT_OPTION IS NULL
+)
+WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.24 Ensure the 'CREATE ROLE' Action Audit Is Enabled - Oracle 12c Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.24</td>' ||
+  '<td>Ensure CREATE ROLE Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG('Policy: ' || AUD.POLICY_NAME || ', Option: ' || AUD.AUDIT_OPTION, '; ') WITHIN GROUP (ORDER BY AUD.POLICY_NAME)
+    ELSE 'CREATE ROLE unified audit policy not enabled'
+    END || '</td>' ||
+  '<td>CREATE ROLE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS CREATE ROLE;</td>' ||
+  '</tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME
+AND AUD.AUDIT_OPTION = 'CREATE ROLE'
+AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES'
+AND ENABLED.FAILURE = 'YES'
+AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.24 Ensure the 'CREATE ROLE' Action Audit Is Enabled - Oracle 18c+ Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN missing_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.24</td>' ||
+  '<td>Ensure CREATE ROLE Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN missing_count = 0 THEN 'CREATE ROLE unified audit policy enabled'
+    ELSE 'CREATE ROLE unified audit policy missing'
+    END || '</td>' ||
+  '<td>CREATE ROLE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS CREATE ROLE;</td>' ||
+  '</tr>'
+FROM (
+  WITH
+  CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'CREATE ROLE' AS AUDIT_OPTION FROM DUAL ),
+  AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD
+    WHERE AUD.AUDIT_OPTION = 'CREATE ROLE' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+      WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS'
+      AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C
+  LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION
+  WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.25 Ensure the 'ALTER ROLE' Action Audit Is Enabled - Oracle 12c Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.25</td>' ||
+  '<td>Ensure ALTER ROLE Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG('Policy: ' || AUD.POLICY_NAME || ', Option: ' || AUD.AUDIT_OPTION, '; ') WITHIN GROUP (ORDER BY AUD.POLICY_NAME)
+    ELSE 'ALTER ROLE unified audit policy not enabled'
+    END || '</td>' ||
+  '<td>ALTER ROLE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS ALTER ROLE;</td>' ||
+  '</tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME
+AND AUD.AUDIT_OPTION = 'ALTER ROLE'
+AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES'
+AND ENABLED.FAILURE = 'YES'
+AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.25 Ensure the 'ALTER ROLE' Action Audit Is Enabled - Oracle 18c+ Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN missing_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.25</td>' ||
+  '<td>Ensure ALTER ROLE Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN missing_count = 0 THEN 'ALTER ROLE unified audit policy enabled'
+    ELSE 'ALTER ROLE unified audit policy missing'
+    END || '</td>' ||
+  '<td>ALTER ROLE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS ALTER ROLE;</td>' ||
+  '</tr>'
+FROM (
+  WITH
+  CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'ALTER ROLE' AS AUDIT_OPTION FROM DUAL ),
+  AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD
+    WHERE AUD.AUDIT_OPTION = 'ALTER ROLE' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+      WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS'
+      AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C
+  LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION
+  WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.26 Ensure the 'DROP ROLE' Action Audit Is Enabled - Oracle 12c Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.26</td>' ||
+  '<td>Ensure DROP ROLE Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG('Policy: ' || AUD.POLICY_NAME || ', Option: ' || AUD.AUDIT_OPTION, '; ') WITHIN GROUP (ORDER BY AUD.POLICY_NAME)
+    ELSE 'DROP ROLE unified audit policy not enabled'
+    END || '</td>' ||
+  '<td>DROP ROLE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS DROP ROLE;</td>' ||
+  '</tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME
+AND AUD.AUDIT_OPTION = 'DROP ROLE'
+AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES'
+AND ENABLED.FAILURE = 'YES'
+AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.26 Ensure the 'DROP ROLE' Action Audit Is Enabled - Oracle 18c+ Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN missing_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.26</td>' ||
+  '<td>Ensure DROP ROLE Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN missing_count = 0 THEN 'DROP ROLE unified audit policy enabled'
+    ELSE 'DROP ROLE unified audit policy missing'
+    END || '</td>' ||
+  '<td>DROP ROLE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS DROP ROLE;</td>' ||
+  '</tr>'
+FROM (
+  WITH
+  CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'DROP ROLE' AS AUDIT_OPTION FROM DUAL ),
+  AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD
+    WHERE AUD.AUDIT_OPTION = 'DROP ROLE' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+      WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS'
+      AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C
+  LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION
+  WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.27 Ensure the 'GRANT' Action Audit Is Enabled - Oracle 12c Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.27</td>' ||
+  '<td>Ensure GRANT Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG('Policy: ' || AUD.POLICY_NAME || ', Option: ' || AUD.AUDIT_OPTION, '; ') WITHIN GROUP (ORDER BY AUD.POLICY_NAME)
+    ELSE 'GRANT unified audit policy not enabled'
+    END || '</td>' ||
+  '<td>GRANT audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS GRANT;</td>' ||
+  '</tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME
+AND AUD.AUDIT_OPTION = 'GRANT'
+AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES'
+AND ENABLED.FAILURE = 'YES'
+AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.27 Ensure the 'GRANT' Action Audit Is Enabled - Oracle 18c+ Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN missing_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.27</td>' ||
+  '<td>Ensure GRANT Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN missing_count = 0 THEN 'GRANT unified audit policy enabled'
+    ELSE 'GRANT unified audit policy missing'
+    END || '</td>' ||
+  '<td>GRANT audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS GRANT;</td>' ||
+  '</tr>'
+FROM (
+  WITH
+  CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'GRANT' AS AUDIT_OPTION FROM DUAL ),
+  AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD
+    WHERE AUD.AUDIT_OPTION = 'GRANT' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+      WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS'
+      AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C
+  LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION
+  WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.28 Ensure the 'REVOKE' Action Audit Is Enabled - Oracle 12c Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.28</td>' ||
+  '<td>Ensure REVOKE Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG('Policy: ' || AUD.POLICY_NAME || ', Option: ' || AUD.AUDIT_OPTION, '; ') WITHIN GROUP (ORDER BY AUD.POLICY_NAME)
+    ELSE 'REVOKE unified audit policy not enabled'
+    END || '</td>' ||
+  '<td>REVOKE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS REVOKE;</td>' ||
+  '</tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME
+AND AUD.AUDIT_OPTION = 'REVOKE'
+AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES'
+AND ENABLED.FAILURE = 'YES'
+AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.28 Ensure the 'REVOKE' Action Audit Is Enabled - Oracle 18c+ Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN missing_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.28</td>' ||
+  '<td>Ensure REVOKE Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN missing_count = 0 THEN 'REVOKE unified audit policy enabled'
+    ELSE 'REVOKE unified audit policy missing'
+    END || '</td>' ||
+  '<td>REVOKE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS REVOKE;</td>' ||
+  '</tr>'
+FROM (
+  WITH
+  CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'REVOKE' AS AUDIT_OPTION FROM DUAL ),
+  AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD
+    WHERE AUD.AUDIT_OPTION = 'REVOKE' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+      WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS'
+      AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C
+  LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION
+  WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.29 Ensure the 'CREATE PROFILE' Action Audit Is Enabled - Oracle 12c Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) > 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.29</td>' ||
+  '<td>Ensure CREATE PROFILE Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 
+      LISTAGG('Policy: ' || AUD.POLICY_NAME || ', Option: ' || AUD.AUDIT_OPTION, '; ') WITHIN GROUP (ORDER BY AUD.POLICY_NAME)
+    ELSE 'CREATE PROFILE unified audit policy not enabled'
+    END || '</td>' ||
+  '<td>CREATE PROFILE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS CREATE PROFILE;</td>' ||
+  '</tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME
+AND AUD.AUDIT_OPTION = 'CREATE PROFILE'
+AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES'
+AND ENABLED.FAILURE = 'YES'
+AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.29 Ensure the 'CREATE PROFILE' Action Audit Is Enabled - Oracle 18c+ Unified Auditing
+SELECT '<tr class="' ||
+  CASE 
+    WHEN missing_count = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>5.29</td>' ||
+  '<td>Ensure CREATE PROFILE Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN missing_count = 0 THEN 'CREATE PROFILE unified audit policy enabled'
+    ELSE 'CREATE PROFILE unified audit policy missing'
+    END || '</td>' ||
+  '<td>CREATE PROFILE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS CREATE PROFILE;</td>' ||
+  '</tr>'
+FROM (
+  WITH
+  CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'CREATE PROFILE' AS AUDIT_OPTION FROM DUAL ),
+  AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD
+    WHERE AUD.AUDIT_OPTION = 'CREATE PROFILE' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+      WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS'
+      AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C
+  LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION
+  WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.30-5.37 Additional Unified Auditing Checks (ALTER PROFILE, DROP PROFILE, DATABASE LINK operations, SYNONYM operations)
+-- Note: Adding remaining checks in abbreviated format due to space constraints
+
+-- 5.30 ALTER PROFILE - 12c
+SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.30</td><td>Ensure ALTER PROFILE Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'ALTER PROFILE audit enabled' ELSE 'ALTER PROFILE audit not enabled' END || '</td>' ||
+  '<td>ALTER PROFILE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS ALTER PROFILE;</td></tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'ALTER PROFILE' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.30 ALTER PROFILE - 18c+
+SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.30</td><td>Ensure ALTER PROFILE Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'ALTER PROFILE audit enabled' ELSE 'ALTER PROFILE audit missing' END || '</td>' ||
+  '<td>ALTER PROFILE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS ALTER PROFILE;</td></tr>'
+FROM ( WITH CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'ALTER PROFILE' FROM DUAL ), AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD WHERE AUD.AUDIT_OPTION = 'ALTER PROFILE' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS' AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.31 DROP PROFILE - 12c
+SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.31</td><td>Ensure DROP PROFILE Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'DROP PROFILE audit enabled' ELSE 'DROP PROFILE audit not enabled' END || '</td>' ||
+  '<td>DROP PROFILE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS DROP PROFILE;</td></tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'DROP PROFILE' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.31 DROP PROFILE - 18c+
+SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.31</td><td>Ensure DROP PROFILE Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'DROP PROFILE audit enabled' ELSE 'DROP PROFILE audit missing' END || '</td>' ||
+  '<td>DROP PROFILE audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS DROP PROFILE;</td></tr>'
+FROM ( WITH CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'DROP PROFILE' FROM DUAL ), AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD WHERE AUD.AUDIT_OPTION = 'DROP PROFILE' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS' AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.32 CREATE DATABASE LINK - 12c
+SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.32</td><td>Ensure CREATE DATABASE LINK Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'CREATE DATABASE LINK audit enabled' ELSE 'CREATE DATABASE LINK audit not enabled' END || '</td>' ||
+  '<td>CREATE DATABASE LINK audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS CREATE DATABASE LINK;</td></tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'CREATE DATABASE LINK' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.32 CREATE DATABASE LINK - 18c+
+SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.32</td><td>Ensure CREATE DATABASE LINK Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'CREATE DATABASE LINK audit enabled' ELSE 'CREATE DATABASE LINK audit missing' END || '</td>' ||
+  '<td>CREATE DATABASE LINK audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS CREATE DATABASE LINK;</td></tr>'
+FROM ( WITH CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'CREATE DATABASE LINK' FROM DUAL ), AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD WHERE AUD.AUDIT_OPTION = 'CREATE DATABASE LINK' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS' AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.33 ALTER DATABASE LINK - 12c
+SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.33</td><td>Ensure ALTER DATABASE LINK Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'ALTER DATABASE LINK audit enabled' ELSE 'ALTER DATABASE LINK audit not enabled' END || '</td>' ||
+  '<td>ALTER DATABASE LINK audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS ALTER DATABASE LINK;</td></tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'ALTER DATABASE LINK' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.33 ALTER DATABASE LINK - 18c+
+SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.33</td><td>Ensure ALTER DATABASE LINK Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'ALTER DATABASE LINK audit enabled' ELSE 'ALTER DATABASE LINK audit missing' END || '</td>' ||
+  '<td>ALTER DATABASE LINK audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS ALTER DATABASE LINK;</td></tr>'
+FROM ( WITH CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'ALTER DATABASE LINK' FROM DUAL ), AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD WHERE AUD.AUDIT_OPTION = 'ALTER DATABASE LINK' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS' AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.34 DROP DATABASE LINK - 12c
+SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.34</td><td>Ensure DROP DATABASE LINK Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'DROP DATABASE LINK audit enabled' ELSE 'DROP DATABASE LINK audit not enabled' END || '</td>' ||
+  '<td>DROP DATABASE LINK audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS DROP DATABASE LINK;</td></tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'DROP DATABASE LINK' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.34 DROP DATABASE LINK - 18c+
+SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.34</td><td>Ensure DROP DATABASE LINK Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'DROP DATABASE LINK audit enabled' ELSE 'DROP DATABASE LINK audit missing' END || '</td>' ||
+  '<td>DROP DATABASE LINK audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS DROP DATABASE LINK;</td></tr>'
+FROM ( WITH CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'DROP DATABASE LINK' FROM DUAL ), AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD WHERE AUD.AUDIT_OPTION = 'DROP DATABASE LINK' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS' AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.35 CREATE SYNONYM - 12c
+SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.35</td><td>Ensure CREATE SYNONYM Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'CREATE SYNONYM audit enabled' ELSE 'CREATE SYNONYM audit not enabled' END || '</td>' ||
+  '<td>CREATE SYNONYM audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS CREATE SYNONYM;</td></tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'CREATE SYNONYM' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.35 CREATE SYNONYM - 18c+
+SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.35</td><td>Ensure CREATE SYNONYM Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'CREATE SYNONYM audit enabled' ELSE 'CREATE SYNONYM audit missing' END || '</td>' ||
+  '<td>CREATE SYNONYM audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS CREATE SYNONYM;</td></tr>'
+FROM ( WITH CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'CREATE SYNONYM' FROM DUAL ), AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD WHERE AUD.AUDIT_OPTION = 'CREATE SYNONYM' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS' AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.36 ALTER SYNONYM - 12c
+SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.36</td><td>Ensure ALTER SYNONYM Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'ALTER SYNONYM audit enabled' ELSE 'ALTER SYNONYM audit not enabled' END || '</td>' ||
+  '<td>ALTER SYNONYM audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS ALTER SYNONYM;</td></tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'ALTER SYNONYM' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.36 ALTER SYNONYM - 18c+
+SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.36</td><td>Ensure ALTER SYNONYM Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'ALTER SYNONYM audit enabled' ELSE 'ALTER SYNONYM audit missing' END || '</td>' ||
+  '<td>ALTER SYNONYM audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS ALTER SYNONYM;</td></tr>'
+FROM ( WITH CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'ALTER SYNONYM' FROM DUAL ), AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD WHERE AUD.AUDIT_OPTION = 'ALTER SYNONYM' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS' AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
+
+-- 5.37 DROP SYNONYM - 12c
+SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.37</td><td>Ensure DROP SYNONYM Action Audit Is Enabled (Scored) - 12c Unified Auditing</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN COUNT(*) > 0 THEN 'DROP SYNONYM audit enabled' ELSE 'DROP SYNONYM audit not enabled' END || '</td>' ||
+  '<td>DROP SYNONYM audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS DROP SYNONYM;</td></tr>'
+FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
+WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'DROP SYNONYM' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
+AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+
+-- 5.37 DROP SYNONYM - 18c+
+SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
+  '<td>5.37</td><td>Ensure DROP SYNONYM Action Audit Is Enabled (Scored) - 18c+ Unified Auditing</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || CASE WHEN missing_count = 0 THEN 'DROP SYNONYM audit enabled' ELSE 'DROP SYNONYM audit missing' END || '</td>' ||
+  '<td>DROP SYNONYM audit enabled in unified audit policy</td>' ||
+  '<td class="remediation">ALTER AUDIT POLICY CIS_UNIFIED_AUDIT_POLICY ADD ACTIONS DROP SYNONYM;</td></tr>'
+FROM ( WITH CIS_AUDIT(AUDIT_OPTION) AS ( SELECT 'DROP SYNONYM' FROM DUAL ), AUDIT_ENABLED AS
+  ( SELECT DISTINCT AUDIT_OPTION FROM AUDIT_UNIFIED_POLICIES AUD WHERE AUD.AUDIT_OPTION = 'DROP SYNONYM' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
+    AND EXISTS (SELECT * FROM AUDIT_UNIFIED_ENABLED_POLICIES ENABLED WHERE ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES'
+      AND ENABLED.ENABLED_OPTION = 'BY USER' AND ENABLED.ENTITY_NAME = 'ALL USERS' AND ENABLED.POLICY_NAME = AUD.POLICY_NAME) )
+  SELECT COUNT(*) AS missing_count FROM CIS_AUDIT C LEFT JOIN AUDIT_ENABLED E ON C.AUDIT_OPTION = E.AUDIT_OPTION WHERE E.AUDIT_OPTION IS NULL
+) WHERE TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) >= 18;
 
 PROMPT </table>
 
 -- 12c+ Unified Auditing Section
 SELECT CASE WHEN version LIKE '12.%' OR version LIKE '18.%' OR version LIKE '19.%' THEN
-  '<h3>5.23 Unified Auditing (12c+)</h3>' ||
+  '<h3>5.38 Unified Auditing (12c+)</h3>' ||
   '<p>Unified Auditing provides improved performance and centralized audit management.</p>' ||
   '<table>' ||
   '<tr><th width="5%">Control</th><th width="35%">Title</th><th width="8%">Status</th><th width="20%">Current Value</th><th width="15%">Expected</th><th width="17%">Remediation</th></tr>'
@@ -7631,7 +10676,7 @@ SELECT CASE WHEN vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version 
     WHEN VALUE = 'TRUE' THEN 'pass'
     ELSE 'warning'
   END || '">' ||
-  '<td>5.23.1</td>' ||
+  '<td>5.38.1</td>' ||
   '<td>Consider Enabling Unified Auditing (12c+) (Not Scored)</td>' ||
   '<td>' || CASE WHEN VALUE = 'TRUE' THEN 'ENABLED' ELSE 'DISABLED' END || '</td>' ||
   '<td>' || NVL(VALUE, 'DISABLED') || '</td>' ||
@@ -7647,7 +10692,7 @@ WHERE vo.PARAMETER = 'Unified Auditing'
 SELECT CASE WHEN (version LIKE '12.%' OR version LIKE '18.%' OR version LIKE '19.%') AND
   (SELECT VALUE FROM V$OPTION WHERE PARAMETER = 'Unified Auditing') = 'TRUE' THEN
   '<tr class="pass">' ||
-  '<td>5.23.2</td>' ||
+  '<td>5.38.2</td>' ||
   '<td>Unified Audit Policies Enabled (12c+)</td>' ||
   '<td>CONFIGURED</td>' ||
   '<td>Active policies: ' || 
@@ -7667,7 +10712,7 @@ SELECT CASE WHEN vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version 
     WHEN fc.policy_count > 0 THEN 'pass'
     ELSE 'manual'
   END || '">' ||
-  '<td>5.23.3</td>' ||
+  '<td>5.38.3</td>' ||
   '<td>Fine-Grained Auditing (FGA) Policies</td>' ||
   '<td>' || CASE WHEN fc.policy_count > 0 THEN 'CONFIGURED' ELSE 'NONE' END || '</td>' ||
   '<td>FGA policies: ' || fc.policy_count || '</td>' ||
