@@ -410,6 +410,25 @@ SELECT CASE
   ELSE '<p><strong>Assessment Scope:</strong> Single-tenant database (all controls apply directly)</p>' 
 END FROM v$instance;
 
+-- List detected PDBs (only when running in a multitenant CDB environment)
+SELECT '<h4>Detected Pluggable Databases</h4>' ||
+       '<table>' ||
+       '<tr><th width="8%">CON_ID</th><th width="30%">Name</th><th width="20%">Open Mode</th><th width="12%">Restricted</th></tr>'
+FROM DUAL
+WHERE (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES';
+
+SELECT '<tr><td>' || TO_CHAR(CON_ID) || '</td>' ||
+       '<td>' || NAME || '</td>' ||
+       '<td>' || OPEN_MODE || '</td>' ||
+       '<td>' || RESTRICTED || '</td>' ||
+       '</tr>'
+FROM V$PDBS
+WHERE (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+ORDER BY CON_ID;
+
+SELECT '</table>' FROM DUAL
+WHERE (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES';
+
 PROMPT </div>
 
 -- Table of Contents
