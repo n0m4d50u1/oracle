@@ -460,13 +460,713 @@ PROMPT   <ul>
 PROMPT     <li><a href="#section5_38">5.38 Unified Auditing (12c+)</a></li>
 PROMPT   </ul>
 PROMPT </li>
-PROMPT <li><a href="#summary">Executive Summary</a>
-PROMPT   <ul>
-PROMPT     <li><a href="#risk_assessment">Risk Assessment</a></li>
-PROMPT     <li><a href="#remediation_plan">Security Remediation Action Plan</a></li>
-PROMPT   </ul>
-PROMPT </li>
+PROMPT <li><a href="#summary">Executive Summary</a></li>
 PROMPT </ul>
+PROMPT <div id="exec-summary" style="margin: 30px 0;">
+PROMPT <h2 id="summary" style="color: #1565c0; margin-bottom: 15px;">Executive Summary</h2>
+SELECT '<div style="background-color: #e3f2fd; padding: 16px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px;">' ||
+       '<h3 style="margin-top: 0; color: #1565c0; display: flex; align-items: center; font-size: 18px;"><span class="material-icons" style="margin-right: 8px;">assessment</span>Audit Overview</h3>' ||
+       '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; font-size: 13px; color: #2c3e50;">' ||
+       '<div><strong>Audit Date:</strong> ' || TO_CHAR(SYSDATE, 'DD-MON-YYYY HH24:MI:SS') || '</div>' ||
+       '<div><strong>Database:</strong> ' || SYS_CONTEXT('USERENV', 'DB_NAME') || '</div>' ||
+       '<div><strong>Instance:</strong> ' || SYS_CONTEXT('USERENV', 'INSTANCE_NAME') || '</div>' ||
+       '<div><strong>Host:</strong> ' || SYS_CONTEXT('USERENV', 'SERVER_HOST') || '</div>' ||
+       '<div><strong>Oracle Version:</strong> ' || version || '</div>' ||
+       '<div><strong>Container Context:</strong> ' ||
+         CASE WHEN (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+              THEN SYS_CONTEXT('USERENV', 'CON_NAME') || ' (CDB environment)'
+              ELSE 'Non-CDB'
+         END || '</div>' ||
+       '</div></div>'
+FROM v$instance;
+
+WITH
+  default_pw AS (
+    SELECT COUNT(*) cnt FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%'
+  ),
+  sample_accounts AS (
+    SELECT COUNT(*) cnt FROM DBA_USERS
+    WHERE USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH','DEMO','SAMPLE','TEST','GUEST','OUTLN')
+      AND ACCOUNT_STATUS NOT LIKE 'LOCKED%'
+      AND ACCOUNT_STATUS NOT LIKE 'EXPIRED%'
+  ),
+  param_issues AS (
+    SELECT COUNT(*) cnt FROM V$PARAMETER
+    WHERE (UPPER(NAME) = 'AUDIT_SYS_OPERATIONS' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED'))
+       OR (UPPER(NAME) = 'GLOBAL_NAMES' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'LOCAL_LISTENER' AND (VALUE IS NULL OR UPPER(VALUE) NOT LIKE '%IPC%'))
+       OR (UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY' AND UPPER(VALUE) != 'FALSE' AND VALUE IS NOT NULL)
+       OR (UPPER(NAME) = 'OS_ROLES' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'REMOTE_LISTENER' AND VALUE IS NOT NULL AND LENGTH(TRIM(VALUE)) > 0)
+       OR (UPPER(NAME) = 'REMOTE_LOGIN_PASSWORDFILE' AND UPPER(VALUE) != 'NONE')
+       OR (UPPER(NAME) = 'REMOTE_OS_AUTHENT' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'REMOTE_OS_ROLES' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'UTL_FILE_DIR' AND VALUE IS NOT NULL AND LENGTH(TRIM(VALUE)) > 0)
+       OR (UPPER(NAME) = 'SEC_CASE_SENSITIVE_LOGON' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'SEC_MAX_FAILED_LOGIN_ATTEMPTS' AND NVL(VALUE,'0') NOT IN ('3','3.0'))
+       OR (UPPER(NAME) = 'SEC_PROTOCOL_ERROR_FURTHER_ACTION' AND UPPER(VALUE) NOT LIKE '%DELAY%3%' AND UPPER(VALUE) NOT LIKE '%DROP%3%')
+       OR (UPPER(NAME) = 'SEC_PROTOCOL_ERROR_TRACE_ACTION' AND UPPER(VALUE) != 'LOG')
+       OR (UPPER(NAME) = 'SEC_RETURN_SERVER_RELEASE_BANNER' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'SQL92_SECURITY' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = '_TRACE_FILES_PUBLIC' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'RESOURCE_LIMIT' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'COMMON_USER_PREFIX' AND UPPER(VALUE) != 'C##')
+       OR (UPPER(NAME) = 'ENABLE_DDL_LOGGING' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'LDAP_DIRECTORY_SYSAUTH' AND UPPER(VALUE) != 'NO')
+       OR (UPPER(NAME) = 'ALLOW_GROUP_ACCESS_TO_SGA' AND UPPER(VALUE) != 'FALSE')
+  ),
+  profile_raw AS (
+    SELECT PROFILE, RESOURCE_NAME FROM DBA_PROFILES
+    WHERE RESOURCE_NAME IN ('FAILED_LOGIN_ATTEMPTS','PASSWORD_LOCK_TIME','PASSWORD_LIFE_TIME','PASSWORD_REUSE_MAX',
+                            'PASSWORD_REUSE_TIME','PASSWORD_GRACE_TIME','SESSIONS_PER_USER','IDLE_TIME','INACTIVE_ACCOUNT_TIME')
+      AND (
+        LIMIT = 'UNLIMITED'
+        OR LIMIT = 'DEFAULT'
+        OR (RESOURCE_NAME = 'FAILED_LOGIN_ATTEMPTS' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 5)
+        OR (RESOURCE_NAME = 'PASSWORD_LOCK_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9.]+$') AND TO_NUMBER(LIMIT) < 1)
+        OR (RESOURCE_NAME = 'PASSWORD_LIFE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 90)
+        OR (RESOURCE_NAME = 'PASSWORD_REUSE_MAX' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 20)
+        OR (RESOURCE_NAME = 'PASSWORD_REUSE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 365)
+        OR (RESOURCE_NAME = 'PASSWORD_GRACE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 5)
+        OR (RESOURCE_NAME = 'SESSIONS_PER_USER' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 10)
+        OR (RESOURCE_NAME = 'IDLE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 30)
+        OR (RESOURCE_NAME = 'INACTIVE_ACCOUNT_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 120)
+      )
+  ),
+  profile_issues AS (
+    SELECT COUNT(*) cnt FROM profile_raw
+  ),
+  public_exec AS (
+    SELECT COUNT(DISTINCT TABLE_NAME) cnt
+    FROM DBA_TAB_PRIVS
+    WHERE GRANTEE='PUBLIC'
+      AND PRIVILEGE='EXECUTE'
+      AND TABLE_NAME IN (
+        'DBMS_LDAP','UTL_TCP','UTL_SMTP','UTL_HTTP','UTL_INADDR','UTL_URL','HTTPURITYPE','DBMS_NETWORK_ACL_ADMIN',
+        'UTL_FILE','DBMS_LOB','DBMS_ADVISOR','DBMS_FILE_TRANSFER','DBMS_CRYPTO','DBMS_OBFUSCATION_TOOLKIT','DBMS_RANDOM',
+        'DBMS_JAVA','DBMS_JAVA_TEST','DBMS_SCHEDULER','DBMS_JOB','DBMS_SQL','DBMS_XMLGEN','DBMS_XMLQUERY','DBMS_XMLSTORE',
+        'DBMS_XMLSAVE','DBMS_AW','OWA_UTIL','DBMS_REDACT','DBMS_CREDENTIAL','DBMS_BACKUP_RESTORE','DBMS_STREAMS_RPC',
+        'DBMS_AQADM_SYSCALLS','DBMS_REPCAT_SQL_UTL','INITJVMAUX','DBMS_STREAMS_ADM_UTL','DBMS_AQADM_SYS','DBMS_PRVTAQIM',
+        'LTADM','WWV_DBMS_SQL','WWV_EXECUTE_IMMEDIATE','DBMS_IJOB'
+      )
+  ),
+  any_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT sp.GRANTEE, sp.PRIVILEGE
+      FROM DBA_SYS_PRIVS sp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = sp.GRANTEE
+      LEFT JOIN DBA_ROLES r ON r.ROLE = sp.GRANTEE
+      WHERE sp.PRIVILEGE LIKE '%ANY%'
+        AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+        AND sp.GRANTEE NOT LIKE 'C##%'
+    )
+  ),
+  system_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT sp.GRANTEE, sp.PRIVILEGE
+      FROM DBA_SYS_PRIVS sp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = sp.GRANTEE
+      LEFT JOIN DBA_ROLES r ON r.ROLE = sp.GRANTEE
+      WHERE sp.PRIVILEGE IN ('ALTER SYSTEM','DROP ANY TABLE','CREATE ANY PROCEDURE','ALTER ANY PROCEDURE','DROP ANY PROCEDURE',
+                             'CREATE ANY TRIGGER','ALTER ANY TRIGGER','DROP ANY TRIGGER','BECOME USER')
+        AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+        AND sp.GRANTEE NOT LIKE 'C##%'
+    )
+  ),
+  role_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT rp.GRANTEE, rp.GRANTED_ROLE
+      FROM DBA_ROLE_PRIVS rp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = rp.GRANTEE
+      LEFT JOIN DBA_ROLES gr ON gr.ROLE = rp.GRANTEE
+      LEFT JOIN DBA_ROLES granted ON granted.ROLE = rp.GRANTED_ROLE
+      WHERE NVL(u.ORACLE_MAINTAINED, NVL(gr.ORACLE_MAINTAINED, 'N')) = 'N'
+        AND NVL(granted.ORACLE_MAINTAINED, 'N') = 'N'
+        AND rp.GRANTEE NOT LIKE 'C##%'
+        AND rp.GRANTED_ROLE IN ('DBA','SYSDBA','SYSOPER','EXP_FULL_DATABASE','IMP_FULL_DATABASE',
+                                'DELETE_CATALOG_ROLE','EXECUTE_CATALOG_ROLE','SELECT_CATALOG_ROLE')
+    )
+  ),
+  table_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT tp.GRANTEE, tp.TABLE_NAME
+      FROM DBA_TAB_PRIVS tp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = tp.GRANTEE
+      LEFT JOIN DBA_ROLES r ON r.ROLE = tp.GRANTEE
+      WHERE tp.OWNER = 'SYS'
+        AND tp.TABLE_NAME IN ('USER$','LINK$','USER_HISTORY$','PROXY_DATA$','UNDO$','USER$MIG')
+        AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+        AND tp.GRANTEE NOT LIKE 'C##%'
+    )
+  ),
+  exempt_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT sp.GRANTEE
+      FROM DBA_SYS_PRIVS sp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = sp.GRANTEE
+      LEFT JOIN DBA_ROLES r ON r.ROLE = sp.GRANTEE
+      WHERE sp.PRIVILEGE = 'EXEMPT ACCESS POLICY'
+        AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+    )
+  ),
+  audit_stmt_missing AS (
+    SELECT COUNT(*) cnt
+    FROM (
+      SELECT 'CREATE SESSION' opt FROM DUAL UNION ALL
+      SELECT 'SYSTEM GRANT' FROM DUAL UNION ALL
+      SELECT 'USER' FROM DUAL UNION ALL
+      SELECT 'ALTER USER' FROM DUAL UNION ALL
+      SELECT 'DROP USER' FROM DUAL UNION ALL
+      SELECT 'PROFILE' FROM DUAL UNION ALL
+      SELECT 'ALTER PROFILE' FROM DUAL UNION ALL
+      SELECT 'DROP PROFILE' FROM DUAL UNION ALL
+      SELECT 'DATABASE LINK' FROM DUAL UNION ALL
+      SELECT 'PUBLIC DATABASE LINK' FROM DUAL UNION ALL
+      SELECT 'PUBLIC SYNONYM' FROM DUAL UNION ALL
+      SELECT 'SYNONYM' FROM DUAL UNION ALL
+      SELECT 'GRANT DIRECTORY' FROM DUAL UNION ALL
+      SELECT 'SELECT ANY DICTIONARY' FROM DUAL
+    ) expected
+    LEFT JOIN (
+      SELECT DISTINCT AUDIT_OPTION FROM DBA_STMT_AUDIT_OPTS WHERE SUCCESS = 'BY ACCESS'
+    ) actual ON expected.opt = actual.AUDIT_OPTION
+    WHERE actual.AUDIT_OPTION IS NULL
+  ),
+  audit_priv_missing AS (
+    SELECT COUNT(*) cnt
+    FROM (
+      SELECT 'GRANT ANY PRIVILEGE' opt FROM DUAL UNION ALL
+      SELECT 'GRANT ANY OBJECT PRIVILEGE' FROM DUAL
+    ) expected
+    LEFT JOIN (
+      SELECT DISTINCT PRIVILEGE FROM DBA_PRIV_AUDIT_OPTS WHERE SUCCESS = 'BY ACCESS'
+    ) actual ON expected.opt = actual.PRIVILEGE
+    WHERE actual.PRIVILEGE IS NULL
+  ),
+  audit_param_gaps AS (
+    SELECT (CASE WHEN EXISTS (SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED')) THEN 1 ELSE 0 END +
+            CASE WHEN EXISTS (SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_SYS_OPERATIONS' AND UPPER(VALUE) != 'TRUE') THEN 1 ELSE 0 END) cnt
+    FROM DUAL
+  ),
+  metrics AS (
+    SELECT dp.cnt AS default_pw_cnt,
+           sa.cnt AS sample_account_cnt,
+           pi.cnt AS param_issue_cnt,
+           pr.cnt AS profile_issue_cnt,
+           pe.cnt AS public_exec_cnt,
+           ap.cnt AS any_priv_cnt,
+           sp.cnt AS system_priv_cnt,
+           rp.cnt AS role_priv_cnt,
+           tp.cnt AS table_priv_cnt,
+           ep.cnt AS exempt_priv_cnt,
+           asm.cnt AS audit_stmt_gap_cnt,
+           apr.cnt AS audit_priv_gap_cnt,
+           apar.cnt AS audit_param_gap_cnt,
+           (dp.cnt + sa.cnt) AS install_issues,
+           pi.cnt AS config_issues,
+           pr.cnt AS auth_issues,
+           (pe.cnt + ap.cnt + sp.cnt + rp.cnt + tp.cnt + ep.cnt) AS privilege_issues,
+           (asm.cnt + apr.cnt + apar.cnt) AS audit_issues,
+           (dp.cnt + sa.cnt + pi.cnt + pr.cnt + pe.cnt + ap.cnt + sp.cnt + rp.cnt + tp.cnt + ep.cnt + asm.cnt + apr.cnt + apar.cnt) AS total_findings,
+           (dp.cnt + pr.cnt) AS credential_findings,
+           (ap.cnt + sp.cnt + rp.cnt + ep.cnt) AS privileged_identity_findings
+    FROM default_pw dp
+    CROSS JOIN sample_accounts sa
+    CROSS JOIN param_issues pi
+    CROSS JOIN profile_issues pr
+    CROSS JOIN public_exec pe
+    CROSS JOIN any_priv ap
+    CROSS JOIN system_priv sp
+    CROSS JOIN role_priv rp
+    CROSS JOIN table_priv tp
+    CROSS JOIN exempt_priv ep
+    CROSS JOIN audit_stmt_missing asm
+    CROSS JOIN audit_priv_missing apr
+    CROSS JOIN audit_param_gaps apar
+  )
+SELECT '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 25px;">' ||
+       '<div style="background: linear-gradient(135deg, #1e88e5 0%, #42a5f5 100%); color: white; padding: 18px; border-radius: 10px; text-align: center;">' ||
+         '<div style="font-size: 34px; font-weight: 700;">' || total_findings || '</div>' ||
+         '<div style="font-size: 13px; opacity: 0.9;">Open Findings</div>' ||
+       '</div>' ||
+       '<div style="background: linear-gradient(135deg, #43a047 0%, #66bb6a 100%); color: white; padding: 18px; border-radius: 10px; text-align: center;">' ||
+         '<div style="font-size: 34px; font-weight: 700;">' || credential_findings || '</div>' ||
+         '<div style="font-size: 13px; opacity: 0.9;">Password & Profile Gaps</div>' ||
+       '</div>' ||
+       '<div style="background: linear-gradient(135deg, #ef6c00 0%, #f57c00 100%); color: white; padding: 18px; border-radius: 10px; text-align: center;">' ||
+         '<div style="font-size: 34px; font-weight: 700;">' || privilege_issues || '</div>' ||
+         '<div style="font-size: 13px; opacity: 0.9;">Privilege & Role Issues</div>' ||
+       '</div>' ||
+       '<div style="background: linear-gradient(135deg, #8e24aa 0%, #ab47bc 100%); color: white; padding: 18px; border-radius: 10px; text-align: center;">' ||
+         '<div style="font-size: 34px; font-weight: 700;">' || audit_issues || '</div>' ||
+         '<div style="font-size: 13px; opacity: 0.9;">Audit & Monitoring Gaps</div>' ||
+       '</div>' ||
+       '</div>'
+FROM metrics;
+
+PROMPT <h3 style="color: #1565c0; margin: 25px 0 10px 0;">Security Domains at a Glance</h3>
+PROMPT <table class="summary-table" style="box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; margin-bottom: 20px;">
+PROMPT <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+PROMPT <th style="padding: 12px; text-align: left;">Domain</th>
+PROMPT <th style="padding: 12px; text-align: center;">Outstanding Issues</th>
+PROMPT <th style="padding: 12px; text-align: left;">Highlights</th>
+PROMPT <th style="padding: 12px; text-align: left;">Status</th></tr>
+
+WITH
+  default_pw AS (
+    SELECT COUNT(*) cnt FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%'
+  ),
+  sample_accounts AS (
+    SELECT COUNT(*) cnt FROM DBA_USERS
+    WHERE USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH','DEMO','SAMPLE','TEST','GUEST','OUTLN')
+      AND ACCOUNT_STATUS NOT LIKE 'LOCKED%'
+      AND ACCOUNT_STATUS NOT LIKE 'EXPIRED%'
+  ),
+  param_issues AS (
+    SELECT COUNT(*) cnt FROM V$PARAMETER
+    WHERE (UPPER(NAME) = 'AUDIT_SYS_OPERATIONS' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED'))
+       OR (UPPER(NAME) = 'GLOBAL_NAMES' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'LOCAL_LISTENER' AND (VALUE IS NULL OR UPPER(VALUE) NOT LIKE '%IPC%'))
+       OR (UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY' AND UPPER(VALUE) != 'FALSE' AND VALUE IS NOT NULL)
+       OR (UPPER(NAME) = 'OS_ROLES' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'REMOTE_LISTENER' AND VALUE IS NOT NULL AND LENGTH(TRIM(VALUE)) > 0)
+       OR (UPPER(NAME) = 'REMOTE_LOGIN_PASSWORDFILE' AND UPPER(VALUE) != 'NONE')
+       OR (UPPER(NAME) = 'REMOTE_OS_AUTHENT' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'REMOTE_OS_ROLES' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'UTL_FILE_DIR' AND VALUE IS NOT NULL AND LENGTH(TRIM(VALUE)) > 0)
+       OR (UPPER(NAME) = 'SEC_CASE_SENSITIVE_LOGON' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'SEC_MAX_FAILED_LOGIN_ATTEMPTS' AND NVL(VALUE,'0') NOT IN ('3','3.0'))
+       OR (UPPER(NAME) = 'SEC_PROTOCOL_ERROR_FURTHER_ACTION' AND UPPER(VALUE) NOT LIKE '%DELAY%3%' AND UPPER(VALUE) NOT LIKE '%DROP%3%')
+       OR (UPPER(NAME) = 'SEC_PROTOCOL_ERROR_TRACE_ACTION' AND UPPER(VALUE) != 'LOG')
+       OR (UPPER(NAME) = 'SEC_RETURN_SERVER_RELEASE_BANNER' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'SQL92_SECURITY' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = '_TRACE_FILES_PUBLIC' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'RESOURCE_LIMIT' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'COMMON_USER_PREFIX' AND UPPER(VALUE) != 'C##')
+       OR (UPPER(NAME) = 'ENABLE_DDL_LOGGING' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'LDAP_DIRECTORY_SYSAUTH' AND UPPER(VALUE) != 'NO')
+       OR (UPPER(NAME) = 'ALLOW_GROUP_ACCESS_TO_SGA' AND UPPER(VALUE) != 'FALSE')
+  ),
+  profile_raw AS (
+    SELECT PROFILE, RESOURCE_NAME FROM DBA_PROFILES
+    WHERE RESOURCE_NAME IN ('FAILED_LOGIN_ATTEMPTS','PASSWORD_LOCK_TIME','PASSWORD_LIFE_TIME','PASSWORD_REUSE_MAX',
+                            'PASSWORD_REUSE_TIME','PASSWORD_GRACE_TIME','SESSIONS_PER_USER','IDLE_TIME','INACTIVE_ACCOUNT_TIME')
+      AND (
+        LIMIT = 'UNLIMITED'
+        OR LIMIT = 'DEFAULT'
+        OR (RESOURCE_NAME = 'FAILED_LOGIN_ATTEMPTS' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 5)
+        OR (RESOURCE_NAME = 'PASSWORD_LOCK_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9.]+$') AND TO_NUMBER(LIMIT) < 1)
+        OR (RESOURCE_NAME = 'PASSWORD_LIFE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 90)
+        OR (RESOURCE_NAME = 'PASSWORD_REUSE_MAX' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 20)
+        OR (RESOURCE_NAME = 'PASSWORD_REUSE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 365)
+        OR (RESOURCE_NAME = 'PASSWORD_GRACE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 5)
+        OR (RESOURCE_NAME = 'SESSIONS_PER_USER' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 10)
+        OR (RESOURCE_NAME = 'IDLE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 30)
+        OR (RESOURCE_NAME = 'INACTIVE_ACCOUNT_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 120)
+      )
+  ),
+  profile_issues AS (
+    SELECT COUNT(*) cnt FROM profile_raw
+  ),
+  public_exec AS (
+    SELECT COUNT(DISTINCT TABLE_NAME) cnt
+    FROM DBA_TAB_PRIVS
+    WHERE GRANTEE='PUBLIC'
+      AND PRIVILEGE='EXECUTE'
+      AND TABLE_NAME IN (
+        'DBMS_LDAP','UTL_TCP','UTL_SMTP','UTL_HTTP','UTL_INADDR','UTL_URL','HTTPURITYPE','DBMS_NETWORK_ACL_ADMIN',
+        'UTL_FILE','DBMS_LOB','DBMS_ADVISOR','DBMS_FILE_TRANSFER','DBMS_CRYPTO','DBMS_OBFUSCATION_TOOLKIT','DBMS_RANDOM',
+        'DBMS_JAVA','DBMS_JAVA_TEST','DBMS_SCHEDULER','DBMS_JOB','DBMS_SQL','DBMS_XMLGEN','DBMS_XMLQUERY','DBMS_XMLSTORE',
+        'DBMS_XMLSAVE','DBMS_AW','OWA_UTIL','DBMS_REDACT','DBMS_CREDENTIAL','DBMS_BACKUP_RESTORE','DBMS_STREAMS_RPC',
+        'DBMS_AQADM_SYSCALLS','DBMS_REPCAT_SQL_UTL','INITJVMAUX','DBMS_STREAMS_ADM_UTL','DBMS_AQADM_SYS','DBMS_PRVTAQIM',
+        'LTADM','WWV_DBMS_SQL','WWV_EXECUTE_IMMEDIATE','DBMS_IJOB'
+      )
+  ),
+  any_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT sp.GRANTEE, sp.PRIVILEGE
+      FROM DBA_SYS_PRIVS sp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = sp.GRANTEE
+      LEFT JOIN DBA_ROLES r ON r.ROLE = sp.GRANTEE
+      WHERE sp.PRIVILEGE LIKE '%ANY%'
+        AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+        AND sp.GRANTEE NOT LIKE 'C##%'
+    )
+  ),
+  system_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT sp.GRANTEE, sp.PRIVILEGE
+      FROM DBA_SYS_PRIVS sp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = sp.GRANTEE
+      LEFT JOIN DBA_ROLES r ON r.ROLE = sp.GRANTEE
+      WHERE sp.PRIVILEGE IN ('ALTER SYSTEM','DROP ANY TABLE','CREATE ANY PROCEDURE','ALTER ANY PROCEDURE','DROP ANY PROCEDURE',
+                             'CREATE ANY TRIGGER','ALTER ANY TRIGGER','DROP ANY TRIGGER','BECOME USER')
+        AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+        AND sp.GRANTEE NOT LIKE 'C##%'
+    )
+  ),
+  role_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT rp.GRANTEE, rp.GRANTED_ROLE
+      FROM DBA_ROLE_PRIVS rp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = rp.GRANTEE
+      LEFT JOIN DBA_ROLES gr ON gr.ROLE = rp.GRANTEE
+      LEFT JOIN DBA_ROLES granted ON granted.ROLE = rp.GRANTED_ROLE
+      WHERE NVL(u.ORACLE_MAINTAINED, NVL(gr.ORACLE_MAINTAINED, 'N')) = 'N'
+        AND NVL(granted.ORACLE_MAINTAINED, 'N') = 'N'
+        AND rp.GRANTEE NOT LIKE 'C##%'
+        AND rp.GRANTED_ROLE IN ('DBA','SYSDBA','SYSOPER','EXP_FULL_DATABASE','IMP_FULL_DATABASE',
+                                'DELETE_CATALOG_ROLE','EXECUTE_CATALOG_ROLE','SELECT_CATALOG_ROLE')
+    )
+  ),
+  table_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT tp.GRANTEE, tp.TABLE_NAME
+      FROM DBA_TAB_PRIVS tp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = tp.GRANTEE
+      LEFT JOIN DBA_ROLES r ON r.ROLE = tp.GRANTEE
+      WHERE tp.OWNER = 'SYS'
+        AND tp.TABLE_NAME IN ('USER$','LINK$','USER_HISTORY$','PROXY_DATA$','UNDO$','USER$MIG')
+        AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+        AND tp.GRANTEE NOT LIKE 'C##%'
+    )
+  ),
+  exempt_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT sp.GRANTEE
+      FROM DBA_SYS_PRIVS sp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = sp.GRANTEE
+      LEFT JOIN DBA_ROLES r ON r.ROLE = sp.GRANTEE
+      WHERE sp.PRIVILEGE = 'EXEMPT ACCESS POLICY'
+        AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+    )
+  ),
+  audit_stmt_missing AS (
+    SELECT COUNT(*) cnt
+    FROM (
+      SELECT 'CREATE SESSION' opt FROM DUAL UNION ALL
+      SELECT 'SYSTEM GRANT' FROM DUAL UNION ALL
+      SELECT 'USER' FROM DUAL UNION ALL
+      SELECT 'ALTER USER' FROM DUAL UNION ALL
+      SELECT 'DROP USER' FROM DUAL UNION ALL
+      SELECT 'PROFILE' FROM DUAL UNION ALL
+      SELECT 'ALTER PROFILE' FROM DUAL UNION ALL
+      SELECT 'DROP PROFILE' FROM DUAL UNION ALL
+      SELECT 'DATABASE LINK' FROM DUAL UNION ALL
+      SELECT 'PUBLIC DATABASE LINK' FROM DUAL UNION ALL
+      SELECT 'PUBLIC SYNONYM' FROM DUAL UNION ALL
+      SELECT 'SYNONYM' FROM DUAL UNION ALL
+      SELECT 'GRANT DIRECTORY' FROM DUAL UNION ALL
+      SELECT 'SELECT ANY DICTIONARY' FROM DUAL
+    ) expected
+    LEFT JOIN (
+      SELECT DISTINCT AUDIT_OPTION FROM DBA_STMT_AUDIT_OPTS WHERE SUCCESS = 'BY ACCESS'
+    ) actual ON expected.opt = actual.AUDIT_OPTION
+    WHERE actual.AUDIT_OPTION IS NULL
+  ),
+  audit_priv_missing AS (
+    SELECT COUNT(*) cnt
+    FROM (
+      SELECT 'GRANT ANY PRIVILEGE' opt FROM DUAL UNION ALL
+      SELECT 'GRANT ANY OBJECT PRIVILEGE' FROM DUAL
+    ) expected
+    LEFT JOIN (
+      SELECT DISTINCT PRIVILEGE FROM DBA_PRIV_AUDIT_OPTS WHERE SUCCESS = 'BY ACCESS'
+    ) actual ON expected.opt = actual.PRIVILEGE
+    WHERE actual.PRIVILEGE IS NULL
+  ),
+  audit_param_gaps AS (
+    SELECT (CASE WHEN EXISTS (SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED')) THEN 1 ELSE 0 END +
+            CASE WHEN EXISTS (SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_SYS_OPERATIONS' AND UPPER(VALUE) != 'TRUE') THEN 1 ELSE 0 END) cnt
+    FROM DUAL
+  ),
+  metrics AS (
+    SELECT dp.cnt AS default_pw_cnt,
+           sa.cnt AS sample_account_cnt,
+           pi.cnt AS param_issue_cnt,
+           pr.cnt AS profile_issue_cnt,
+           pe.cnt AS public_exec_cnt,
+           ap.cnt AS any_priv_cnt,
+           sp.cnt AS system_priv_cnt,
+           rp.cnt AS role_priv_cnt,
+           tp.cnt AS table_priv_cnt,
+           ep.cnt AS exempt_priv_cnt,
+           asm.cnt AS audit_stmt_gap_cnt,
+           apr.cnt AS audit_priv_gap_cnt,
+           apar.cnt AS audit_param_gap_cnt,
+           (dp.cnt + sa.cnt) AS install_issues,
+           pi.cnt AS config_issues,
+           pr.cnt AS auth_issues,
+           (pe.cnt + ap.cnt + sp.cnt + rp.cnt + tp.cnt + ep.cnt) AS privilege_issues,
+           (asm.cnt + apr.cnt + apar.cnt) AS audit_issues
+    FROM default_pw dp
+    CROSS JOIN sample_accounts sa
+    CROSS JOIN param_issues pi
+    CROSS JOIN profile_issues pr
+    CROSS JOIN public_exec pe
+    CROSS JOIN any_priv ap
+    CROSS JOIN system_priv sp
+    CROSS JOIN role_priv rp
+    CROSS JOIN table_priv tp
+    CROSS JOIN exempt_priv ep
+    CROSS JOIN audit_stmt_missing asm
+    CROSS JOIN audit_priv_missing apr
+    CROSS JOIN audit_param_gaps apar
+  )
+SELECT '<tr><td style="padding: 10px; font-weight: 500;">Access & Accounts</td>' ||
+       '<td style="padding: 10px; text-align: center; font-weight: bold;">' || install_issues || '</td>' ||
+       '<td style="padding: 10px;">Default passwords: ' || default_pw_cnt || ' &nbsp;|&nbsp; Sample accounts: ' || sample_account_cnt || '</td>' ||
+       '<td style="padding: 10px;">' ||
+         CASE WHEN install_issues = 0 THEN '<span style="color: #2e7d32; font-weight: 600;">Compliant</span>'
+              ELSE '<span style="color: #c62828; font-weight: 600;">Needs attention</span>' END ||
+       '</td></tr>' ||
+       '<tr><td style="padding: 10px; font-weight: 500;">Configuration & Parameters</td>' ||
+       '<td style="padding: 10px; text-align: center; font-weight: bold;">' || config_issues || '</td>' ||
+       '<td style="padding: 10px;">Parameters requiring hardening: ' || param_issue_cnt || '</td>' ||
+       '<td style="padding: 10px;">' ||
+         CASE WHEN config_issues = 0 THEN '<span style="color: #2e7d32; font-weight: 600;">Compliant</span>'
+              ELSE '<span style="color: #c62828; font-weight: 600;">Needs attention</span>' END ||
+       '</td></tr>' ||
+       '<tr><td style="padding: 10px; font-weight: 500;">Authentication Policies</td>' ||
+       '<td style="padding: 10px; text-align: center; font-weight: bold;">' || auth_issues || '</td>' ||
+       '<td style="padding: 10px;">Profile settings to adjust: ' || profile_issue_cnt || '</td>' ||
+       '<td style="padding: 10px;">' ||
+         CASE WHEN auth_issues = 0 THEN '<span style="color: #2e7d32; font-weight: 600;">Compliant</span>'
+              ELSE '<span style="color: #c62828; font-weight: 600;">Needs attention</span>' END ||
+       '</td></tr>' ||
+       '<tr><td style="padding: 10px; font-weight: 500;">Privileges & Roles</td>' ||
+       '<td style="padding: 10px; text-align: center; font-weight: bold;">' || privilege_issues || '</td>' ||
+       '<td style="padding: 10px;">PUBLIC EXECUTE: ' || public_exec_cnt || ', ANY privileges: ' || any_priv_cnt || ', Elevated roles: ' || role_priv_cnt || '</td>' ||
+       '<td style="padding: 10px;">' ||
+         CASE WHEN privilege_issues = 0 THEN '<span style="color: #2e7d32; font-weight: 600;">Compliant</span>'
+              ELSE '<span style="color: #c62828; font-weight: 600;">Needs attention</span>' END ||
+       '</td></tr>' ||
+       '<tr><td style="padding: 10px; font-weight: 500;">Auditing & Monitoring</td>' ||
+       '<td style="padding: 10px; text-align: center; font-weight: bold;">' || audit_issues || '</td>' ||
+       '<td style="padding: 10px;">Statement audits: ' || audit_stmt_gap_cnt || ', privilege audits: ' || audit_priv_gap_cnt || ', parameter fixes: ' || audit_param_gap_cnt || '</td>' ||
+       '<td style="padding: 10px;">' ||
+         CASE WHEN audit_issues = 0 THEN '<span style="color: #2e7d32; font-weight: 600;">Compliant</span>'
+              ELSE '<span style="color: #c62828; font-weight: 600;">Needs attention</span>' END ||
+       '</td></tr>'
+FROM metrics;
+PROMPT </table>
+
+PROMPT <h3 style="color: #1565c0; margin: 25px 0 10px 0;">Priority Actions</h3>
+WITH
+  default_pw AS (
+    SELECT COUNT(*) cnt FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%'
+  ),
+  sample_accounts AS (
+    SELECT COUNT(*) cnt FROM DBA_USERS
+    WHERE USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH','DEMO','SAMPLE','TEST','GUEST','OUTLN')
+      AND ACCOUNT_STATUS NOT LIKE 'LOCKED%'
+      AND ACCOUNT_STATUS NOT LIKE 'EXPIRED%'
+  ),
+  param_issues AS (
+    SELECT COUNT(*) cnt FROM V$PARAMETER
+    WHERE (UPPER(NAME) = 'AUDIT_SYS_OPERATIONS' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED'))
+       OR (UPPER(NAME) = 'GLOBAL_NAMES' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'LOCAL_LISTENER' AND (VALUE IS NULL OR UPPER(VALUE) NOT LIKE '%IPC%'))
+       OR (UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY' AND UPPER(VALUE) != 'FALSE' AND VALUE IS NOT NULL)
+       OR (UPPER(NAME) = 'OS_ROLES' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'REMOTE_LISTENER' AND VALUE IS NOT NULL AND LENGTH(TRIM(VALUE)) > 0)
+       OR (UPPER(NAME) = 'REMOTE_LOGIN_PASSWORDFILE' AND UPPER(VALUE) != 'NONE')
+       OR (UPPER(NAME) = 'REMOTE_OS_AUTHENT' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'REMOTE_OS_ROLES' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'UTL_FILE_DIR' AND VALUE IS NOT NULL AND LENGTH(TRIM(VALUE)) > 0)
+       OR (UPPER(NAME) = 'SEC_CASE_SENSITIVE_LOGON' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'SEC_MAX_FAILED_LOGIN_ATTEMPTS' AND NVL(VALUE,'0') NOT IN ('3','3.0'))
+       OR (UPPER(NAME) = 'SEC_PROTOCOL_ERROR_FURTHER_ACTION' AND UPPER(VALUE) NOT LIKE '%DELAY%3%' AND UPPER(VALUE) NOT LIKE '%DROP%3%')
+       OR (UPPER(NAME) = 'SEC_PROTOCOL_ERROR_TRACE_ACTION' AND UPPER(VALUE) != 'LOG')
+       OR (UPPER(NAME) = 'SEC_RETURN_SERVER_RELEASE_BANNER' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'SQL92_SECURITY' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = '_TRACE_FILES_PUBLIC' AND UPPER(VALUE) != 'FALSE')
+       OR (UPPER(NAME) = 'RESOURCE_LIMIT' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'COMMON_USER_PREFIX' AND UPPER(VALUE) != 'C##')
+       OR (UPPER(NAME) = 'ENABLE_DDL_LOGGING' AND UPPER(VALUE) != 'TRUE')
+       OR (UPPER(NAME) = 'LDAP_DIRECTORY_SYSAUTH' AND UPPER(VALUE) != 'NO')
+       OR (UPPER(NAME) = 'ALLOW_GROUP_ACCESS_TO_SGA' AND UPPER(VALUE) != 'FALSE')
+  ),
+  profile_raw AS (
+    SELECT PROFILE, RESOURCE_NAME FROM DBA_PROFILES
+    WHERE RESOURCE_NAME IN ('FAILED_LOGIN_ATTEMPTS','PASSWORD_LOCK_TIME','PASSWORD_LIFE_TIME','PASSWORD_REUSE_MAX',
+                            'PASSWORD_REUSE_TIME','PASSWORD_GRACE_TIME','SESSIONS_PER_USER','IDLE_TIME','INACTIVE_ACCOUNT_TIME')
+      AND (
+        LIMIT = 'UNLIMITED'
+        OR LIMIT = 'DEFAULT'
+        OR (RESOURCE_NAME = 'FAILED_LOGIN_ATTEMPTS' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 5)
+        OR (RESOURCE_NAME = 'PASSWORD_LOCK_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9.]+$') AND TO_NUMBER(LIMIT) < 1)
+        OR (RESOURCE_NAME = 'PASSWORD_LIFE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 90)
+        OR (RESOURCE_NAME = 'PASSWORD_REUSE_MAX' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 20)
+        OR (RESOURCE_NAME = 'PASSWORD_REUSE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 365)
+        OR (RESOURCE_NAME = 'PASSWORD_GRACE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 5)
+        OR (RESOURCE_NAME = 'SESSIONS_PER_USER' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 10)
+        OR (RESOURCE_NAME = 'IDLE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 30)
+        OR (RESOURCE_NAME = 'INACTIVE_ACCOUNT_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 120)
+      )
+  ),
+  profile_issues AS (
+    SELECT COUNT(*) cnt FROM profile_raw
+  ),
+  public_exec AS (
+    SELECT COUNT(DISTINCT TABLE_NAME) cnt
+    FROM DBA_TAB_PRIVS
+    WHERE GRANTEE='PUBLIC'
+      AND PRIVILEGE='EXECUTE'
+      AND TABLE_NAME IN (
+        'DBMS_LDAP','UTL_TCP','UTL_SMTP','UTL_HTTP','UTL_INADDR','UTL_URL','HTTPURITYPE','DBMS_NETWORK_ACL_ADMIN',
+        'UTL_FILE','DBMS_LOB','DBMS_ADVISOR','DBMS_FILE_TRANSFER','DBMS_CRYPTO','DBMS_OBFUSCATION_TOOLKIT','DBMS_RANDOM',
+        'DBMS_JAVA','DBMS_JAVA_TEST','DBMS_SCHEDULER','DBMS_JOB','DBMS_SQL','DBMS_XMLGEN','DBMS_XMLQUERY','DBMS_XMLSTORE',
+        'DBMS_XMLSAVE','DBMS_AW','OWA_UTIL','DBMS_REDACT','DBMS_CREDENTIAL','DBMS_BACKUP_RESTORE','DBMS_STREAMS_RPC',
+        'DBMS_AQADM_SYSCALLS','DBMS_REPCAT_SQL_UTL','INITJVMAUX','DBMS_STREAMS_ADM_UTL','DBMS_AQADM_SYS','DBMS_PRVTAQIM',
+        'LTADM','WWV_DBMS_SQL','WWV_EXECUTE_IMMEDIATE','DBMS_IJOB'
+      )
+  ),
+  any_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT sp.GRANTEE, sp.PRIVILEGE
+      FROM DBA_SYS_PRIVS sp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = sp.GRANTEE
+      LEFT JOIN DBA_ROLES r ON r.ROLE = sp.GRANTEE
+      WHERE sp.PRIVILEGE LIKE '%ANY%'
+        AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+        AND sp.GRANTEE NOT LIKE 'C##%'
+    )
+  ),
+  system_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT sp.GRANTEE, sp.PRIVILEGE
+      FROM DBA_SYS_PRIVS sp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = sp.GRANTEE
+      LEFT JOIN DBA_ROLES r ON r.ROLE = sp.GRANTEE
+      WHERE sp.PRIVILEGE IN ('ALTER SYSTEM','DROP ANY TABLE','CREATE ANY PROCEDURE','ALTER ANY PROCEDURE','DROP ANY PROCEDURE',
+                             'CREATE ANY TRIGGER','ALTER ANY TRIGGER','DROP ANY TRIGGER','BECOME USER')
+        AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+        AND sp.GRANTEE NOT LIKE 'C##%'
+    )
+  ),
+  role_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT rp.GRANTEE, rp.GRANTED_ROLE
+      FROM DBA_ROLE_PRIVS rp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = rp.GRANTEE
+      LEFT JOIN DBA_ROLES gr ON gr.ROLE = rp.GRANTEE
+      LEFT JOIN DBA_ROLES granted ON granted.ROLE = rp.GRANTED_ROLE
+      WHERE NVL(u.ORACLE_MAINTAINED, NVL(gr.ORACLE_MAINTAINED, 'N')) = 'N'
+        AND NVL(granted.ORACLE_MAINTAINED, 'N') = 'N'
+        AND rp.GRANTEE NOT LIKE 'C##%'
+        AND rp.GRANTED_ROLE IN ('DBA','SYSDBA','SYSOPER','EXP_FULL_DATABASE','IMP_FULL_DATABASE',
+                                'DELETE_CATALOG_ROLE','EXECUTE_CATALOG_ROLE','SELECT_CATALOG_ROLE')
+    )
+  ),
+  table_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT tp.GRANTEE, tp.TABLE_NAME
+      FROM DBA_TAB_PRIVS tp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = tp.GRANTEE
+      LEFT JOIN DBA_ROLES r ON r.ROLE = tp.GRANTEE
+      WHERE tp.OWNER = 'SYS'
+        AND tp.TABLE_NAME IN ('USER$','LINK$','USER_HISTORY$','PROXY_DATA$','UNDO$','USER$MIG')
+        AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+        AND tp.GRANTEE NOT LIKE 'C##%'
+    )
+  ),
+  exempt_priv AS (
+    SELECT COUNT(*) cnt FROM (
+      SELECT DISTINCT sp.GRANTEE
+      FROM DBA_SYS_PRIVS sp
+      LEFT JOIN DBA_USERS u ON u.USERNAME = sp.GRANTEE
+      LEFT JOIN DBA_ROLES r ON r.ROLE = sp.GRANTEE
+      WHERE sp.PRIVILEGE = 'EXEMPT ACCESS POLICY'
+        AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+    )
+  ),
+  audit_stmt_missing AS (
+    SELECT COUNT(*) cnt
+    FROM (
+      SELECT 'CREATE SESSION' opt FROM DUAL UNION ALL
+      SELECT 'SYSTEM GRANT' FROM DUAL UNION ALL
+      SELECT 'USER' FROM DUAL UNION ALL
+      SELECT 'ALTER USER' FROM DUAL UNION ALL
+      SELECT 'DROP USER' FROM DUAL UNION ALL
+      SELECT 'PROFILE' FROM DUAL UNION ALL
+      SELECT 'ALTER PROFILE' FROM DUAL UNION ALL
+      SELECT 'DROP PROFILE' FROM DUAL UNION ALL
+      SELECT 'DATABASE LINK' FROM DUAL UNION ALL
+      SELECT 'PUBLIC DATABASE LINK' FROM DUAL UNION ALL
+      SELECT 'PUBLIC SYNONYM' FROM DUAL UNION ALL
+      SELECT 'SYNONYM' FROM DUAL UNION ALL
+      SELECT 'GRANT DIRECTORY' FROM DUAL UNION ALL
+      SELECT 'SELECT ANY DICTIONARY' FROM DUAL
+    ) expected
+    LEFT JOIN (
+      SELECT DISTINCT AUDIT_OPTION FROM DBA_STMT_AUDIT_OPTS WHERE SUCCESS = 'BY ACCESS'
+    ) actual ON expected.opt = actual.AUDIT_OPTION
+    WHERE actual.AUDIT_OPTION IS NULL
+  ),
+  audit_priv_missing AS (
+    SELECT COUNT(*) cnt
+    FROM (
+      SELECT 'GRANT ANY PRIVILEGE' opt FROM DUAL UNION ALL
+      SELECT 'GRANT ANY OBJECT PRIVILEGE' FROM DUAL
+    ) expected
+    LEFT JOIN (
+      SELECT DISTINCT PRIVILEGE FROM DBA_PRIV_AUDIT_OPTS WHERE SUCCESS = 'BY ACCESS'
+    ) actual ON expected.opt = actual.PRIVILEGE
+    WHERE actual.PRIVILEGE IS NULL
+  ),
+  audit_param_gaps AS (
+    SELECT (CASE WHEN EXISTS (SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED')) THEN 1 ELSE 0 END +
+            CASE WHEN EXISTS (SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_SYS_OPERATIONS' AND UPPER(VALUE) != 'TRUE') THEN 1 ELSE 0 END) cnt
+    FROM DUAL
+  ),
+  metrics AS (
+    SELECT dp.cnt AS default_pw_cnt,
+           sa.cnt AS sample_account_cnt,
+           pi.cnt AS param_issue_cnt,
+           pr.cnt AS profile_issue_cnt,
+           pe.cnt AS public_exec_cnt,
+           ap.cnt AS any_priv_cnt,
+           sp.cnt AS system_priv_cnt,
+           rp.cnt AS role_priv_cnt,
+           tp.cnt AS table_priv_cnt,
+           ep.cnt AS exempt_priv_cnt,
+           asm.cnt AS audit_stmt_gap_cnt,
+           apr.cnt AS audit_priv_gap_cnt,
+           apar.cnt AS audit_param_gap_cnt,
+           (dp.cnt + sa.cnt + pi.cnt + pr.cnt + pe.cnt + ap.cnt + sp.cnt + rp.cnt + tp.cnt + ep.cnt + asm.cnt + apr.cnt + apar.cnt) AS total_findings
+    FROM default_pw dp
+    CROSS JOIN sample_accounts sa
+    CROSS JOIN param_issues pi
+    CROSS JOIN profile_issues pr
+    CROSS JOIN public_exec pe
+    CROSS JOIN any_priv ap
+    CROSS JOIN system_priv sp
+    CROSS JOIN role_priv rp
+    CROSS JOIN table_priv tp
+    CROSS JOIN exempt_priv ep
+    CROSS JOIN audit_stmt_missing asm
+    CROSS JOIN audit_priv_missing apr
+    CROSS JOIN audit_param_gaps apar
+  )
+SELECT '<ul style="margin: 0 0 20px 0; padding-left: 20px; color: #37474f; font-size: 13px;">' ||
+       CASE WHEN default_pw_cnt > 0 THEN '<li><strong>Reset ' || default_pw_cnt || '</strong> account(s) with default passwords.</li>' ELSE '' END ||
+       CASE WHEN param_issue_cnt > 0 THEN '<li><strong>Review ' || param_issue_cnt || '</strong> database initialization parameter(s) that diverge from CIS guidance.</li>' ELSE '' END ||
+       CASE WHEN profile_issue_cnt > 0 THEN '<li><strong>Harden password profiles:</strong> ' || profile_issue_cnt || ' rule(s) exceed policy limits.</li>' ELSE '' END ||
+       CASE WHEN (public_exec_cnt + any_priv_cnt + system_priv_cnt + role_priv_cnt + exempt_priv_cnt) > 0 THEN '<li><strong>Reduce elevated privileges:</strong> PUBLIC packages (' || public_exec_cnt || '), ANY privileges (' || any_priv_cnt || '), sensitive roles (' || role_priv_cnt || ').</li>' ELSE '' END ||
+       CASE WHEN (audit_stmt_gap_cnt + audit_priv_gap_cnt + audit_param_gap_cnt) > 0 THEN '<li><strong>Enable auditing:</strong> ' || (audit_stmt_gap_cnt + audit_priv_gap_cnt + audit_param_gap_cnt) || ' required audit controls are disabled.</li>' ELSE '' END ||
+       CASE WHEN total_findings = 0 THEN '<li>All evaluated CIS checks passed. Continue monitoring and periodic reviews.</li>' ELSE '' END ||
+       '</ul>'
+FROM metrics;
+
+PROMPT <div style="background-color: #fff3cd; padding: 12px; border-left: 4px solid #ffc107; border-radius: 6px; font-size: 12px; color: #795548;">
+PROMPT <strong>Reminder:</strong> validate remediation steps in a non-production environment and coordinate changes with application owners.
+PROMPT </div>
+PROMPT </div>
+
 PROMPT </div>
 
 -- Section 1: Oracle Database Installation and Patching Requirements
@@ -4006,7 +4706,7 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_TAB_PRIVS
 WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_SYS_SQL'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.2.1 DBMS_SYS_SQL - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -4394,7 +5094,7 @@ SELECT '<tr class="' ||
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='SELECT ANY DICTIONARY'
 AND GRANTEE NOT IN ('DBA','DBSNMP','OEM_MONITOR','OLAPSYS','ORACLE_OCM','SYSMAN','WMSYS')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.3.1 SELECT_ANY_DICTIONARY - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -4505,7 +5205,7 @@ SELECT '<tr class="' ||
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='SELECT ANY TABLE'
 AND GRANTEE NOT IN ('DBA', 'MDSYS', 'SYS', 'IMP_FULL_DATABASE', 'EXP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE', 'WMSYS', 'SYSTEM','OLAP_DBA','OLAPSYS')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.3.2 SELECT ANY TABLE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -4616,7 +5316,7 @@ SELECT '<tr class="' ||
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='AUDIT SYSTEM'
 AND GRANTEE NOT IN ('DBA','DATAPUMP_IMP_FULL_DATABASE','IMP_FULL_DATABASE','SYS')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.3.3 AUDIT SYSTEM - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -4726,7 +5426,7 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='EXEMPT ACCESS POLICY'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.3.4 EXEMPT ACCESS POLICY - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -4837,7 +5537,7 @@ SELECT '<tr class="' ||
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='BECOME USER'
 AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.3.5 BECOME USER - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -4948,7 +5648,7 @@ SELECT '<tr class="' ||
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='CREATE PROCEDURE'
 AND GRANTEE NOT IN ('DBA','DBSNMP','MDSYS','OLAPSYS','OWB$CLIENT','OWBSYS','RECOVERY_CATALOG_OWNER','SPATIAL_CSW_ADMIN_USR','SPATIAL_WFS_ADMIN_USR','SYS','APEX_030200','APEX_040000','APEX_040100','APEX_040200','RESOURCE')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.3.6 CREATE_PROCEDURE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -5081,7 +5781,7 @@ SELECT '<tr class="' ||
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='CREATE ANY LIBRARY'
 AND GRANTEE NOT IN ('SYS','SYSTEM','DBA','IMP_FULL_DATABASE')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.3.8 CREATE ANY LIBRARY - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -5192,7 +5892,7 @@ SELECT '<tr class="' ||
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='CREATE LIBRARY'
 AND GRANTEE NOT IN ('SYS','SYSTEM','DBA','SPATIAL_CSW_ADMIN_USR','XDB','EXFSYS','MDSYS','SPATIAL_WFS_ADMIN_USR')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.3.9 CREATE LIBRARY - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -5303,7 +6003,7 @@ SELECT '<tr class="' ||
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='GRANT ANY OBJECT PRIVILEGE'
 AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.3.10 GRANT ANY OBJECT PRIVILEGE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -5414,7 +6114,7 @@ SELECT '<tr class="' ||
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='GRANT ANY ROLE'
 AND GRANTEE NOT IN ('DBA','SYS','DATAPUMP_IMP_FULL_DATABASE','IMP_FULL_DATABASE','SPATIAL_WFS_ADMIN_USR','SPATIAL_CSW_ADMIN_USR')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.3.11 GRANT ANY ROLE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -5525,7 +6225,7 @@ SELECT '<tr class="' ||
 FROM DBA_SYS_PRIVS
 WHERE PRIVILEGE='GRANT ANY PRIVILEGE'
 AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.3.12 GRANT ANY PRIVILEGE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -5643,7 +6343,7 @@ SELECT '<tr class="' ||
 FROM DBA_ROLE_PRIVS
 WHERE GRANTED_ROLE='DELETE_CATALOG_ROLE'
 AND GRANTEE NOT IN ('DBA','SYS')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.4.1 DELETE_CATALOG_ROLE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -5754,7 +6454,7 @@ SELECT '<tr class="' ||
 FROM DBA_ROLE_PRIVS
 WHERE GRANTED_ROLE='SELECT_CATALOG_ROLE'
 AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE','EXP_FULL_DATABASE','OEM_MONITOR','SYSMAN')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.4.2 SELECT_CATALOG_ROLE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -5865,7 +6565,7 @@ SELECT '<tr class="' ||
 FROM DBA_ROLE_PRIVS
 WHERE GRANTED_ROLE='EXECUTE_CATALOG_ROLE'
 AND GRANTEE NOT IN ('DBA','SYS','IMP_FULL_DATABASE','EXP_FULL_DATABASE')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.4.3 EXECUTE_CATALOG_ROLE - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -5976,7 +6676,7 @@ SELECT '<tr class="' ||
 FROM DBA_ROLE_PRIVS
 WHERE GRANTED_ROLE='DBA'
 AND GRANTEE NOT IN ('SYS','SYSTEM')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.4.4 DBA - Oracle 12c+ Non-multitenant OR when running from PDB
 WITH dba_access AS (
@@ -6230,7 +6930,7 @@ SELECT '<tr class="' ||
 FROM DBA_TAB_PRIVS
 WHERE TABLE_NAME='AUD$'
 AND GRANTEE NOT IN ('DELETE_CATALOG_ROLE')
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 4.5.1 ALL on AUD$ - Oracle 12c+ Non-multitenant OR when running from PDB
 SELECT '<tr class="' ||
@@ -7856,7 +8556,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.1 Enable 'USER' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
 WITH user_audit_opts AS (
@@ -7967,7 +8667,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS'
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.2 Enable 'ALTER USER' Audit Option - Oracle 12c Unified Auditing
 SELECT '<tr class="' ||
@@ -7992,7 +8692,7 @@ AND AUD.AUDIT_OPTION = 'ALTER USER'
 AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES'
 AND ENABLED.FAILURE = 'YES'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.2 Enable 'ALTER USER' Audit Option - Oracle 18c+ Unified Auditing
 WITH VERSION_CHECK AS (
@@ -8061,7 +8761,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS'
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.3 Enable 'DROP USER' Audit Option - Oracle 12c Unified Auditing
 SELECT '<tr class="' ||
@@ -8086,7 +8786,7 @@ AND AUD.AUDIT_OPTION = 'DROP USER'
 AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES'
 AND ENABLED.FAILURE = 'YES'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.3 Enable 'DROP USER' Audit Option - Oracle 18c+ Unified Auditing
 WITH VERSION_CHECK AS (
@@ -8155,7 +8855,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.4 Enable 'ROLE' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
 WITH CONTAINER_INFO AS (
@@ -8257,7 +8957,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.5 Enable 'SYSTEM GRANT' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
 WITH CONTAINER_INFO AS (
@@ -8359,7 +9059,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.6 Enable 'PROFILE' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
 WITH CONTAINER_INFO AS (
@@ -8461,7 +9161,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS'
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.7 Enable 'ALTER PROFILE' Audit Option - Oracle 12c Unified Auditing
 SELECT '<tr class="' ||
@@ -8486,7 +9186,7 @@ AND AUD.AUDIT_OPTION = 'ALTER PROFILE'
 AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES'
 AND ENABLED.FAILURE = 'YES'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.7 Enable 'ALTER PROFILE' Audit Option - Oracle 18c+ Unified Auditing
 WITH VERSION_CHECK AS (
@@ -8555,7 +9255,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS'
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.8 Enable 'DROP PROFILE' Audit Option - Oracle 12c Unified Auditing
 SELECT '<tr class="' ||
@@ -8580,7 +9280,7 @@ AND AUD.AUDIT_OPTION = 'DROP PROFILE'
 AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES'
 AND ENABLED.FAILURE = 'YES'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.8 Enable 'DROP PROFILE' Audit Option - Oracle 18c+ Unified Auditing
 WITH VERSION_CHECK AS (
@@ -8649,7 +9349,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.9 Enable 'DATABASE LINK' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
 WITH CONTAINER_INFO AS (
@@ -8751,7 +9451,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.10 Enable 'PUBLIC DATABASE LINK' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
 WITH CONTAINER_INFO AS (
@@ -8853,7 +9553,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.11 Enable 'PUBLIC SYNONYM' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
 WITH CONTAINER_INFO AS (
@@ -8955,7 +9655,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.12 Enable 'SYNONYM' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
 WITH CONTAINER_INFO AS (
@@ -9057,7 +9757,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.13 Enable 'DIRECTORY' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
 WITH CONTAINER_INFO AS (
@@ -9159,7 +9859,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.14 Enable 'SELECT ANY DICTIONARY' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB
 WITH CONTAINER_INFO AS (
@@ -9261,7 +9961,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.15 Enable 'GRANT ANY OBJECT PRIVILEGE' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
 WITH CONTAINER_INFO AS (
@@ -9368,7 +10068,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.16 Enable 'GRANT ANY PRIVILEGE' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
 WITH CONTAINER_INFO AS (
@@ -9470,7 +10170,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.17 Enable 'DROP ANY PROCEDURE' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
 WITH CONTAINER_INFO AS (
@@ -9579,7 +10279,7 @@ AND REN='A/A'
 AND SEL='A/A'
 AND UPD='A/A'
 AND FBK='A/A'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.18 Enable 'ALL' Audit Option on 'SYS.AUD$' - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_OBJ_AUDIT_OPTS)
 WITH CONTAINER_INFO AS (
@@ -9696,7 +10396,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.19 Enable 'PROCEDURE' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
 WITH CONTAINER_INFO AS (
@@ -9798,7 +10498,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.20 Enable 'ALTER SYSTEM' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
 WITH CONTAINER_INFO AS (
@@ -9900,7 +10600,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.21 Enable 'TRIGGER' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
 WITH CONTAINER_INFO AS (
@@ -10002,7 +10702,7 @@ AND USER_NAME IS NULL
 AND PROXY_NAME IS NULL
 AND SUCCESS = 'BY ACCESS' 
 AND FAILURE = 'BY ACCESS'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 11;
+HAVING '&version_num' = '11';
 
 -- 5.22 Enable 'CREATE SESSION' Audit Option - Oracle 12c+ Non-multitenant OR when running from PDB (uses DBA_STMT_AUDIT_OPTS)
 WITH CONTAINER_INFO AS (
@@ -10105,7 +10805,7 @@ AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES'
 AND ENABLED.FAILURE = 'YES'
 AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.23 Enable 'CREATE USER' Audit Option - Oracle 18c+ Unified Auditing (Enhanced)
 SELECT '<tr class="' ||
@@ -10174,7 +10874,7 @@ AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES'
 AND ENABLED.FAILURE = 'YES'
 AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.24 Ensure the 'CREATE ROLE' Action Audit Is Enabled - Oracle 18c+ Unified Auditing
 SELECT '<tr class="' ||
@@ -10231,7 +10931,7 @@ AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES'
 AND ENABLED.FAILURE = 'YES'
 AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.25 Ensure the 'ALTER ROLE' Action Audit Is Enabled - Oracle 18c+ Unified Auditing
 SELECT '<tr class="' ||
@@ -10288,7 +10988,7 @@ AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES'
 AND ENABLED.FAILURE = 'YES'
 AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.26 Ensure the 'DROP ROLE' Action Audit Is Enabled - Oracle 18c+ Unified Auditing
 SELECT '<tr class="' ||
@@ -10345,7 +11045,7 @@ AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES'
 AND ENABLED.FAILURE = 'YES'
 AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.27 Ensure the 'GRANT' Action Audit Is Enabled - Oracle 18c+ Unified Auditing
 SELECT '<tr class="' ||
@@ -10402,7 +11102,7 @@ AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES'
 AND ENABLED.FAILURE = 'YES'
 AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.28 Ensure the 'REVOKE' Action Audit Is Enabled - Oracle 18c+ Unified Auditing
 SELECT '<tr class="' ||
@@ -10459,7 +11159,7 @@ AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES'
 AND ENABLED.FAILURE = 'YES'
 AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.29 Ensure the 'CREATE PROFILE' Action Audit Is Enabled - Oracle 18c+ Unified Auditing
 SELECT '<tr class="' ||
@@ -10505,7 +11205,7 @@ SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '"
 FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
 WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'ALTER PROFILE' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.30 ALTER PROFILE - 18c+
 SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
@@ -10531,7 +11231,7 @@ SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '"
 FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
 WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'DROP PROFILE' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.31 DROP PROFILE - 18c+
 SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
@@ -10557,7 +11257,7 @@ SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '"
 FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
 WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'CREATE DATABASE LINK' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.32 CREATE DATABASE LINK - 18c+
 SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
@@ -10583,7 +11283,7 @@ SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '"
 FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
 WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'ALTER DATABASE LINK' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.33 ALTER DATABASE LINK - 18c+
 SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
@@ -10609,7 +11309,7 @@ SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '"
 FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
 WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'DROP DATABASE LINK' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.34 DROP DATABASE LINK - 18c+
 SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
@@ -10635,7 +11335,7 @@ SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '"
 FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
 WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'CREATE SYNONYM' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.35 CREATE SYNONYM - 18c+
 SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
@@ -10661,7 +11361,7 @@ SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '"
 FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
 WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'ALTER SYNONYM' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.36 ALTER SYNONYM - 18c+
 SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
@@ -10687,7 +11387,7 @@ SELECT '<tr class="' || CASE WHEN COUNT(*) > 0 THEN 'pass' ELSE 'fail' END || '"
 FROM AUDIT_UNIFIED_POLICIES AUD, AUDIT_UNIFIED_ENABLED_POLICIES ENABLED
 WHERE AUD.POLICY_NAME = ENABLED.POLICY_NAME AND AUD.AUDIT_OPTION = 'DROP SYNONYM' AND AUD.AUDIT_OPTION_TYPE = 'STANDARD ACTION'
 AND ENABLED.SUCCESS = 'YES' AND ENABLED.FAILURE = 'YES' AND ENABLED.ENABLED_OPTION = 'BY USER'
-AND TO_NUMBER(SUBSTR((SELECT VERSION FROM V$INSTANCE), 1, 2)) = 12;
+HAVING '&version_num' = '12';
 
 -- 5.37 DROP SYNONYM - 18c+
 SELECT '<tr class="' || CASE WHEN missing_count = 0 THEN 'pass' ELSE 'fail' END || '">' ||
@@ -10768,1232 +11468,24 @@ FROM v$instance vi, fga_count fc;
 
 SELECT CASE WHEN version LIKE '12.%' OR version LIKE '18.%' OR version LIKE '19.%' THEN '</table>' ELSE '' END FROM v$instance;
 
--- Summary Section
-PROMPT <h2 id="summary">Executive Summary</h2>
-
--- Generate audit timestamp and metadata
-SELECT '<div style="background-color: #e3f2fd; padding: 15px; margin-bottom: 20px; border-radius: 8px; border-left: 5px solid #2196f3;">' ||
-  '<h3 style="margin-top: 0; color: #1565c0;"><span class="material-icons" style="vertical-align: middle; margin-right: 8px;">assessment</span>Audit Overview</h3>' ||
-  '<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">' ||
-  '<div><strong>Audit Date:</strong> ' || TO_CHAR(SYSDATE, 'DD-MON-YYYY HH24:MI:SS') || '</div>' ||
-  '<div><strong>Database:</strong> ' || SYS_CONTEXT('USERENV', 'DB_NAME') || '</div>' ||
-  '<div><strong>Instance:</strong> ' || SYS_CONTEXT('USERENV', 'INSTANCE_NAME') || '</div>' ||
-  '<div><strong>Host:</strong> ' || SYS_CONTEXT('USERENV', 'SERVER_HOST') || '</div>' ||
-  '<div><strong>Version:</strong> ' || version || '</div>' ||
-  '<div><strong>Container:</strong> ' || 
-    CASE 
-      WHEN (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' THEN
-        'CDB - ' || SYS_CONTEXT('USERENV', 'CON_NAME')
-      ELSE 'Non-CDB'
-    END || '</div>' ||
-  '</div>' ||
-  '</div>'
-FROM v$instance;
-
--- Calculate comprehensive summary statistics (version-aware)
--- Note: Avoiding CTEs due to SQL*Plus execution issues
--- Generate summary statistics and display
-SELECT 
-  '<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 20px;">' ||
-  -- Total Checks Card
-  '<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 8px; color: white; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">' ||
-  '<div style="font-size: 36px; font-weight: bold;">' || total_checks || '</div>' ||
-  '<div style="font-size: 14px; margin-top: 8px; opacity: 0.9;">Total Controls</div>' ||
-  '</div>' ||
-  -- Passed Card
-  '<div style="background: linear-gradient(135deg, #43a047 0%, #66bb6a 100%); padding: 20px; border-radius: 8px; color: white; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">' ||
-  '<div style="font-size: 36px; font-weight: bold;">' || total_passes || '</div>' ||
-  '<div style="font-size: 14px; margin-top: 8px; opacity: 0.9;">Controls Passed</div>' ||
-  '</div>' ||
-  -- Failed Card
-  '<div style="background: linear-gradient(135deg, #e53935 0%, #ef5350 100%); padding: 20px; border-radius: 8px; color: white; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">' ||
-  '<div style="font-size: 36px; font-weight: bold;">' || total_failures || '</div>' ||
-  '<div style="font-size: 14px; margin-top: 8px; opacity: 0.9;">Controls Failed</div>' ||
-  '</div>' ||
-  -- Compliance Rate Card
-  '<div style="background: linear-gradient(135deg, #1e88e5 0%, #42a5f5 100%); padding: 20px; border-radius: 8px; color: white; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">' ||
-  '<div style="font-size: 36px; font-weight: bold;">' || overall_pass_rate || '%</div>' ||
-  '<div style="font-size: 14px; margin-top: 8px; opacity: 0.9;">Compliance Rate</div>' ||
-  '</div>' ||
-  '</div>'
-FROM (
-  SELECT 
-    -- Calculate total checks dynamically based on version
-    CASE 
-      WHEN version LIKE '19.%' THEN 109  -- Approx for 19c
-      WHEN version LIKE '18.%' THEN 108  -- Approx for 18c
-      WHEN version LIKE '12.%' THEN 105  -- Approx for 12c
-      ELSE 95  -- Approx for 11g
-    END as total_checks,
-    50 as total_passes,  -- Placeholder - ideally should be calculated
-    45 as total_failures,  -- Placeholder
-    52.6 as overall_pass_rate  -- Placeholder
-  FROM v$instance
-);
-
--- Simple category breakdown without complex CTEs
-PROMPT <h3 style="color: #1565c0; margin-top: 25px;"><span class="material-icons" style="vertical-align: middle; margin-right: 8px;">category</span>Category Breakdown</h3>
-PROMPT <table class="summary-table" style="box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden;">
-PROMPT <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-PROMPT <th style="padding: 12px; text-align: left;">Security Category</th>
-PROMPT <th style="padding: 12px; text-align: center;">Total</th>
-PROMPT <th style="padding: 12px; text-align: center;">Passed</th>
-PROMPT <th style="padding: 12px; text-align: center;">Failed</th>
-PROMPT <th style="padding: 12px; text-align: center;">Compliance</th>
-PROMPT <th style="padding: 12px; text-align: left;">Status</th></tr>
-
--- Installation & Patching row
-SELECT 
-  '<tr style="border-bottom: 1px solid #e0e0e0;">' ||
-  '<td style="padding: 10px; font-weight: 500;">' ||
-  '<span class="material-icons" style="vertical-align: middle; margin-right: 8px; color: #1e88e5;">build</span>' ||
-  'Installation & Patching</td>' ||
-  '<td style="padding: 10px; text-align: center; font-weight: bold;">' || 
-    CASE 
-      WHEN version LIKE '18.%' OR version LIKE '19.%' THEN 5
-      WHEN version LIKE '12.%' THEN 4
-      ELSE 3
-    END || '</td>' ||
-  '<td style="padding: 10px; text-align: center; color: #43a047; font-weight: bold;">2</td>' ||
-  '<td style="padding: 10px; text-align: center; color: #e53935; font-weight: bold;">1</td>' ||
-  '<td style="padding: 10px; text-align: center;">' ||
-    '<div style="background-color: #f5f5f5; border-radius: 10px; overflow: hidden; height: 20px; position: relative;">' ||
-    '<div style="background: linear-gradient(90deg, #43a047 0%, #66bb6a 100%); height: 100%; width: 66%; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold;">66.7%</div></div></td>' ||
-  '<td style="padding: 10px;">' ||
-    '<span style="background-color: #fff3e0; color: #e65100; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">GOOD</span>' ||
-  '</td></tr>'
-FROM v$instance;
-
--- Database Parameters row
-SELECT 
-  '<tr style="border-bottom: 1px solid #e0e0e0;">' ||
-  '<td style="padding: 10px; font-weight: 500;">' ||
-  '<span class="material-icons" style="vertical-align: middle; margin-right: 8px; color: #43a047;">settings</span>' ||
-  'Database Parameters</td>' ||
-  '<td style="padding: 10px; text-align: center; font-weight: bold;">23</td>' ||
-  '<td style="padding: 10px; text-align: center; color: #43a047; font-weight: bold;">15</td>' ||
-  '<td style="padding: 10px; text-align: center; color: #e53935; font-weight: bold;">8</td>' ||
-  '<td style="padding: 10px; text-align: center;">' ||
-    '<div style="background-color: #f5f5f5; border-radius: 10px; overflow: hidden; height: 20px; position: relative;">' ||
-    '<div style="background: linear-gradient(90deg, #ffa726 0%, #ffb74d 100%); height: 100%; width: 65%; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold;">65.2%</div></div></td>' ||
-  '<td style="padding: 10px;">' ||
-    '<span style="background-color: #fce4ec; color: #c2185b; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">NEEDS IMPROVEMENT</span>' ||
-  '</td></tr>'
-FROM DUAL
-;
-
--- Connection & Authentication row
-SELECT 
-  '<tr style="border-bottom: 1px solid #e0e0e0;">' ||
-  '<td style="padding: 10px; font-weight: 500;">' ||
-  '<span class="material-icons" style="vertical-align: middle; margin-right: 8px; color: #fb8c00;">lock</span>' ||
-  'Connection & Authentication</td>' ||
-  '<td style="padding: 10px; text-align: center; font-weight: bold;">12</td>' ||
-  '<td style="padding: 10px; text-align: center; color: #43a047; font-weight: bold;">8</td>' ||
-  '<td style="padding: 10px; text-align: center; color: #e53935; font-weight: bold;">4</td>' ||
-  '<td style="padding: 10px; text-align: center;">' ||
-    '<div style="background-color: #f5f5f5; border-radius: 10px; overflow: hidden; height: 20px; position: relative;">' ||
-    '<div style="background: linear-gradient(90deg, #ffa726 0%, #ffb74d 100%); height: 100%; width: 66%; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold;">66.7%</div></div></td>' ||
-  '<td style="padding: 10px;">' ||
-    '<span style="background-color: #fce4ec; color: #c2185b; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">NEEDS IMPROVEMENT</span>' ||
-  '</td></tr>'
-FROM DUAL;
-
--- Package Privilege Control row
-SELECT 
-  '<tr style="border-bottom: 1px solid #e0e0e0;">' ||
-  '<td style="padding: 10px; font-weight: 500;">' ||
-  '<span class="material-icons" style="vertical-align: middle; margin-right: 8px; color: #8e24aa;">inventory_2</span>' ||
-  'Package Privilege Control</td>' ||
-  '<td style="padding: 10px; text-align: center; font-weight: bold;">36</td>' ||
-  '<td style="padding: 10px; text-align: center; color: #43a047; font-weight: bold;">19</td>' ||
-  '<td style="padding: 10px; text-align: center; color: #e53935; font-weight: bold;">17</td>' ||
-  '<td style="padding: 10px; text-align: center;">' ||
-    '<div style="background-color: #f5f5f5; border-radius: 10px; overflow: hidden; height: 20px; position: relative;">' ||
-    '<div style="background: linear-gradient(90deg, #e53935 0%, #ef5350 100%); height: 100%; width: 52%; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold;">52.8%</div></div></td>' ||
-  '<td style="padding: 10px;">' ||
-    '<span style="background-color: #fce4ec; color: #c2185b; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">NEEDS IMPROVEMENT</span>' ||
-  '</td></tr>'
-FROM DUAL;
-
--- System Privilege Control row
-SELECT 
-  '<tr style="border-bottom: 1px solid #e0e0e0;">' ||
-  '<td style="padding: 10px; font-weight: 500;">' ||
-  '<span class="material-icons" style="vertical-align: middle; margin-right: 8px; color: #d81b60;">admin_panel_settings</span>' ||
-  'System Privilege Control</td>' ||
-  '<td style="padding: 10px; text-align: center; font-weight: bold;">16</td>' ||
-  '<td style="padding: 10px; text-align: center; color: #43a047; font-weight: bold;">14</td>' ||
-  '<td style="padding: 10px; text-align: center; color: #e53935; font-weight: bold;">2</td>' ||
-  '<td style="padding: 10px; text-align: center;">' ||
-    '<div style="background-color: #f5f5f5; border-radius: 10px; overflow: hidden; height: 20px; position: relative;">' ||
-    '<div style="background: linear-gradient(90deg, #ffa726 0%, #ffb74d 100%); height: 100%; width: 87%; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold;">87.5%</div></div></td>' ||
-  '<td style="padding: 10px;">' ||
-    '<span style="background-color: #fff3e0; color: #e65100; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">GOOD</span>' ||
-  '</td></tr>'
-FROM DUAL;
-
--- Audit Configuration row
-SELECT 
-  '<tr style="border-bottom: 1px solid #e0e0e0;">' ||
-  '<td style="padding: 10px; font-weight: 500;">' ||
-  '<span class="material-icons" style="vertical-align: middle; margin-right: 8px; color: #00acc1;">policy</span>' ||
-  'Audit Configuration</td>' ||
-  '<td style="padding: 10px; text-align: center; font-weight: bold;">25</td>' ||
-  '<td style="padding: 10px; text-align: center; color: #43a047; font-weight: bold;">2</td>' ||
-  '<td style="padding: 10px; text-align: center; color: #e53935; font-weight: bold;">23</td>' ||
-  '<td style="padding: 10px; text-align: center;">' ||
-    '<div style="background-color: #f5f5f5; border-radius: 10px; overflow: hidden; height: 20px; position: relative;">' ||
-    '<div style="background: linear-gradient(90deg, #e53935 0%, #ef5350 100%); height: 100%; width: 8%; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold;">8%</div></div></td>' ||
-  '<td style="padding: 10px;">' ||
-    '<span style="background-color: #ffebee; color: #b71c1c; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">CRITICAL</span>' ||
-  '</td></tr>'
-FROM DUAL;
-
-PROMPT </table>
-
--- CIS Compliance Score Visualization (simplified version)
-SELECT 
-  '<div style="background-color: #f5f5f5; padding: 20px; margin: 20px 0; border-radius: 8px;">' ||
-  '<h3 style="color: #1565c0; margin-top: 0;"><span class="material-icons" style="vertical-align: middle; margin-right: 8px;">security</span>CIS Compliance Score</h3>' ||
-  '<div style="text-align: center; margin: 20px 0;">' ||
-  '<div style="position: relative; display: inline-block;">' ||
-  '<svg width="200" height="200" viewBox="0 0 200 200">' ||
-  '<circle cx="100" cy="100" r="90" fill="none" stroke="#e0e0e0" stroke-width="20"/>' ||
-  '<circle cx="100" cy="100" r="90" fill="none" stroke="#ff5722" stroke-width="20" ' ||
-  'stroke-dasharray="282.5 282.5" stroke-dashoffset="141.25" transform="rotate(-90 100 100)"/>' ||
-  '<text x="100" y="90" text-anchor="middle" font-size="48" font-weight="bold" fill="#ff5722">50%</text>' ||
-  '<text x="100" y="120" text-anchor="middle" font-size="14" fill="#666">Compliance</text>' ||
-  '</svg>' ||
-  '</div>' ||
-  '<div style="margin-top: 20px;">' ||
-  '<h4 style="color: #ff5722; margin: 10px 0;">Moderate Security Posture - Action Required</h4>' ||
-  '<p style="color: #666; margin: 0;">Your database has significant security gaps that could expose it to various threats. Immediate remediation planning is recommended.</p>' ||
-  '</div>' ||
-  '</div>' ||
-  '</div>'
-FROM DUAL;
-
-
--- Comprehensive Risk Assessment
--- ============================================================================
--- COMPREHENSIVE SECURITY RISK ASSESSMENT - MODERN REDESIGN
--- ============================================================================
-
-PROMPT <h3 id="risk_assessment" style="color: #1565c0; margin-top: 25px;"><span class="material-icons" style="vertical-align: middle; margin-right: 8px;">shield</span>Comprehensive Security Risk Assessment</h3>
-
--- Executive Risk Overview Card
-PROMPT <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; color: white; margin-bottom: 25px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-PROMPT <h4 style="margin: 0 0 15px 0; font-size: 20px;"><span class="material-icons" style="vertical-align: middle; margin-right: 8px; font-size: 24px;">security</span>Security Risk Overview</h4>
-PROMPT <p style="margin: 0; opacity: 0.95; line-height: 1.6;">This assessment identifies critical security vulnerabilities and configuration weaknesses in your Oracle database environment. Each risk is categorized by severity and includes specific remediation guidance.</p>
-PROMPT </div>
-
--- Risk Statistics Cards Grid
-PROMPT <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 30px;">
-
--- Critical Risks Card
-SELECT '<div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-left: 5px solid #dc3545;">' ||
-  '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px;">' ||
-  '<div>' ||
-  '<h5 style="margin: 0; color: #dc3545; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Critical Risks</h5>' ||
-  '<div style="font-size: 36px; font-weight: bold; color: #333; margin-top: 8px;">' ||
-  (SELECT COUNT(*) FROM (
-    SELECT 1 FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%' AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_OS_AUTHENT' AND UPPER(VALUE) != 'FALSE' AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_OS_ROLES' AND UPPER(VALUE) != 'FALSE' AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY' AND UPPER(VALUE) NOT IN ('FALSE') AND VALUE IS NOT NULL AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'UTL_FILE_DIR' AND VALUE IS NOT NULL AND LENGTH(TRIM(VALUE)) > 0 AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='EXEMPT ACCESS POLICY' AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='SELECT ANY DICTIONARY' AND GRANTEE NOT IN ('DBA','DBSNMP','OEM_MONITOR','OLAPSYS','ORACLE_OCM','SYSMAN','WMSYS') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='ALTER SYSTEM' AND GRANTEE NOT IN ('SYS','SYSTEM','DBA') AND ROWNUM = 1
-    UNION ALL  
-    SELECT 1 FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE='DBA' AND GRANTEE NOT IN ('SYS','SYSTEM','SYSMAN') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_SYS_OPERATIONS' AND UPPER(VALUE) != 'TRUE' AND ROWNUM = 1
-  )) || '</div>' ||
-  '</div>' ||
-  '<div style="background: #dc3545; border-radius: 50%; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;">' ||
-  '<span class="material-icons" style="color: white; font-size: 24px;">error</span>' ||
-  '</div>' ||
-  '</div>' ||
-  '<div style="background: #ffebee; padding: 10px; border-radius: 8px; margin-top: 10px;">' ||
-  '<div style="font-size: 12px; color: #c62828; font-weight: 600; text-transform: uppercase; margin-bottom: 4px;">Action Required</div>' ||
-  '<div style="font-size: 13px; color: #d32f2f;">Immediate Response</div>' ||
-  '</div>' ||
-  '</div>' AS critical_card
-FROM DUAL;
-
--- High Risks Card
-SELECT '<div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-left: 5px solid #f57c00;">' ||
-  '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px;">' ||
-  '<div>' ||
-  '<h5 style="margin: 0; color: #f57c00; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">High Risks</h5>' ||
-  '<div style="font-size: 36px; font-weight: bold; color: #333; margin-top: 8px;">' ||
-  (SELECT COUNT(*) FROM (
-    SELECT 1 FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME IN ('DBMS_JAVA','DBMS_SCHEDULER','DBMS_SQL','UTL_FILE','UTL_TCP','UTL_HTTP') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE='DBA' AND GRANTEE NOT IN ('SYS','SYSTEM') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE LIKE '%ANY%' AND GRANTEE NOT IN ('DBA','SYS','SYSTEM','IMP_FULL_DATABASE','EXP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE',
-                        'AUDSYS','GGSYS','GSMADMIN_INTERNAL','SYSBACKUP','SYSDG','SYSKM','SYSRAC') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='FAILED_LOGIN_ATTEMPTS' AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 10)) AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'SEC_RETURN_SERVER_RELEASE_BANNER' AND UPPER(VALUE) != 'FALSE' AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_LOCK_TIME' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 1)) AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_USERS WHERE PASSWORD='EXTERNAL' AND ACCOUNT_STATUS='OPEN' AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE IN ('CREATE LIBRARY','CREATE ANY LIBRARY') AND GRANTEE NOT IN ('SYS','SYSTEM','DBA') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE IN ('GRANT ANY ROLE','GRANT ANY PRIVILEGE','GRANT ANY OBJECT PRIVILEGE') AND GRANTEE NOT IN ('SYS','DBA','IMP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE') AND ROWNUM = 1
-  )) || '</div>' ||
-  '</div>' ||
-  '<div style="background: #f57c00; border-radius: 50%; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;">' ||
-  '<span class="material-icons" style="color: white; font-size: 24px;">warning</span>' ||
-  '</div>' ||
-  '</div>' ||
-  '<div style="background: #fff3e0; padding: 10px; border-radius: 8px; margin-top: 10px;">' ||
-  '<div style="font-size: 12px; color: #e65100; font-weight: 600; text-transform: uppercase; margin-bottom: 4px;">Action Required</div>' ||
-  '<div style="font-size: 13px; color: #ef6c00;">Within 1 Week</div>' ||
-  '</div>' ||
-  '</div>' AS high_card
-FROM DUAL;
-
--- Medium Risks Card  
-SELECT '<div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-left: 5px solid #fbc02d;">' ||
-  '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px;">' ||
-  '<div>' ||
-  '<h5 style="margin: 0; color: #f9a825; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Medium Risks</h5>' ||
-  '<div style="font-size: 36px; font-weight: bold; color: #333; margin-top: 8px;">' ||
-  (SELECT COUNT(*) FROM (
-    SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_LIFE_TIME' AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 180)) AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_USERS WHERE PROFILE='DEFAULT' AND ACCOUNT_STATUS='OPEN' AND USERNAME NOT IN ('SYS','SYSTEM','DBSNMP','XDB','ANONYMOUS') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='CREATE SESSION' AND SUCCESS = 'BY ACCESS') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_LISTENER' AND VALUE IS NOT NULL AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_REUSE_MAX' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 20)) AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_GRACE_TIME' AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 7)) AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM ALL_USERS WHERE USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='SESSIONS_PER_USER' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='IDLE_TIME' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='SYSTEM GRANT' AND SUCCESS = 'BY ACCESS') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION IN ('USER','ALTER USER','DROP USER') AND SUCCESS = 'BY ACCESS') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='PROFILE' AND SUCCESS = 'BY ACCESS') AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'GLOBAL_NAMES' AND UPPER(VALUE) != 'TRUE' AND ROWNUM = 1
-    UNION ALL
-    SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'RESOURCE_LIMIT' AND UPPER(VALUE) != 'TRUE' AND ROWNUM = 1
-  )) || '</div>' ||
-  '</div>' ||
-  '<div style="background: #fbc02d; border-radius: 50%; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;">' ||
-  '<span class="material-icons" style="color: white; font-size: 24px;">info</span>' ||
-  '</div>' ||
-  '</div>' ||
-  '<div style="background: #fffde7; padding: 10px; border-radius: 8px; margin-top: 10px;">' ||
-  '<div style="font-size: 12px; color: #f57f17; font-weight: 600; text-transform: uppercase; margin-bottom: 4px;">Action Required</div>' ||
-  '<div style="font-size: 13px; color: #f9a825;">Within 1 Month</div>' ||
-  '</div>' ||
-  '</div>' AS medium_card
-FROM DUAL;
-
-PROMPT </div>
-
--- Detailed Risk Categories with Modern Card Layout
-PROMPT <h4 style="color: #34495e; margin-top: 30px; margin-bottom: 20px;"><span class="material-icons" style="vertical-align: middle; margin-right: 8px;">analytics</span>Risk Analysis by Category</h4>
-
--- Critical Risks Section with Card Layout
-PROMPT <div style="background: white; border-radius: 12px; padding: 25px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); border-top: 4px solid #dc3545;">
-PROMPT <h5 style="color: #dc3545; margin: 0 0 20px 0; font-size: 18px;"><span class="material-icons" style="vertical-align: middle; margin-right: 8px;">dangerous</span>Critical Security Vulnerabilities</h5>
-
--- Critical: Privilege Escalation
-SELECT CASE WHEN EXISTS (
-  SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='EXEMPT ACCESS POLICY'
-  UNION ALL
-  SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='SELECT ANY DICTIONARY' AND GRANTEE NOT IN ('DBA','DBSNMP','OEM_MONITOR','OLAPSYS','ORACLE_OCM','SYSMAN','WMSYS')
-  UNION ALL
-  SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='ALTER SYSTEM' AND GRANTEE NOT IN ('SYS','SYSTEM','DBA')
-  UNION ALL  
-  SELECT 1 FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE='DBA' AND GRANTEE NOT IN ('SYS','SYSTEM','SYSMAN')
-  ) THEN 
-  '<div style="background: #ffebee; border-radius: 8px; padding: 15px; margin-bottom: 15px; border-left: 4px solid #dc3545;">' ||
-  '<h6 style="color: #c62828; margin: 0 0 10px 0; font-size: 14px; font-weight: 600;"><span class="material-icons" style="font-size: 18px; vertical-align: middle; margin-right: 6px;">admin_panel_settings</span>Privilege Escalation Risks</h6>' ||
-  '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px;">' ||
-  -- EXEMPT ACCESS POLICY
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='EXEMPT ACCESS POLICY')
-    THEN '<div style="background: white; padding: 10px; border-radius: 6px; border: 1px solid #ffcdd2;">' ||
-    '<div style="display: flex; align-items: start;">' ||
-    '<span class="material-icons" style="color: #dc3545; margin-right: 8px; font-size: 20px;">shield_off</span>' ||
-    '<div style="flex: 1;">' ||
-    '<div style="font-weight: 600; color: #333; margin-bottom: 4px;">Policy Bypass Privilege</div>' ||
-    '<div style="font-size: 13px; color: #666;">' ||
-    (SELECT COUNT(DISTINCT GRANTEE) FROM DBA_SYS_PRIVS WHERE PRIVILEGE='EXEMPT ACCESS POLICY') || 
-    ' users can bypass all security policies</div>' ||
-    '</div></div></div>' ELSE '' END ||
-  -- DBA Role
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE='DBA' AND GRANTEE NOT IN ('SYS','SYSTEM','SYSMAN'))
-    THEN '<div style="background: white; padding: 10px; border-radius: 6px; border: 1px solid #ffcdd2;">' ||
-    '<div style="display: flex; align-items: start;">' ||
-    '<span class="material-icons" style="color: #dc3545; margin-right: 8px; font-size: 20px;">supervisor_account</span>' ||
-    '<div style="flex: 1;">' ||
-    '<div style="font-weight: 600; color: #333; margin-bottom: 4px;">Excessive DBA Privileges</div>' ||
-    '<div style="font-size: 13px; color: #666;">' ||
-    (SELECT COUNT(*) FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE='DBA' AND GRANTEE NOT IN ('SYS','SYSTEM','SYSMAN')) || 
-    ' non-system users have DBA role</div>' ||
-    '</div></div></div>' ELSE '' END ||
-  '</div></div>' ELSE '' END AS critical_privs
-FROM DUAL;
-
-PROMPT </div>
-
--- High Risks Section with Card Layout
-PROMPT <div style="background: white; border-radius: 12px; padding: 25px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); border-top: 4px solid #f57c00;">
-PROMPT <h5 style="color: #f57c00; margin: 0 0 20px 0; font-size: 18px;"><span class="material-icons" style="vertical-align: middle; margin-right: 8px;">report_problem</span>High Priority Security Issues</h5>
-
--- High: Package Privileges (condensed display)
-SELECT CASE WHEN EXISTS (
-  SELECT 1 FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' 
-  AND TABLE_NAME IN ('UTL_FILE','UTL_TCP','UTL_HTTP','UTL_SMTP','DBMS_JAVA','DBMS_SCHEDULER','DBMS_SQL','DBMS_JOB')
-  ) THEN 
-  '<div style="background: #fff3e0; border-radius: 8px; padding: 15px; margin-bottom: 15px; border-left: 4px solid #f57c00;">' ||
-  '<h6 style="color: #e65100; margin: 0 0 10px 0; font-size: 14px; font-weight: 600;"><span class="material-icons" style="font-size: 18px; vertical-align: middle; margin-right: 6px;">public</span>Dangerous PUBLIC Privileges</h6>' ||
-  '<div style="background: white; padding: 12px; border-radius: 6px; border: 1px solid #ffe0b2;">' ||
-  '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 8px;">' ||
-  -- List dangerous packages with PUBLIC EXECUTE
-  (SELECT LISTAGG(
-    '<div style="background: #fff3e0; padding: 6px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #e65100; text-align: center;">' ||
-    '<span class="material-icons" style="font-size: 14px; vertical-align: middle; margin-right: 4px;">code</span>' ||
-    TABLE_NAME || '</div>', ''
-  ) WITHIN GROUP (ORDER BY 
-    CASE TABLE_NAME 
-      WHEN 'DBMS_JAVA' THEN 1
-      WHEN 'UTL_FILE' THEN 2  
-      WHEN 'UTL_TCP' THEN 3
-      WHEN 'UTL_HTTP' THEN 4
-      WHEN 'DBMS_SCHEDULER' THEN 5
-      WHEN 'DBMS_SQL' THEN 6
-      ELSE 99 
-    END
-  )
-  FROM (SELECT DISTINCT TABLE_NAME FROM DBA_TAB_PRIVS 
-        WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' 
-        AND TABLE_NAME IN ('UTL_FILE','UTL_TCP','UTL_HTTP','UTL_SMTP','DBMS_JAVA',
-                          'DBMS_SCHEDULER','DBMS_SQL','DBMS_JOB','DBMS_LOB','DBMS_RANDOM',
-                          'DBMS_XMLGEN','DBMS_ADVISOR','DBMS_LDAP','DBMS_OBFUSCATION_TOOLKIT',
-                          'DBMS_CRYPTO','DBMS_XMLQUERY','HTTPURITYPE','UTL_INADDR')
-        AND ROWNUM <= 12)) ||
-  '</div></div></div>' ELSE '' END AS high_packages
-FROM DUAL;
-
--- High: Password & Authentication
-SELECT CASE WHEN EXISTS (
-  SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT')
-  UNION ALL
-  SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='FAILED_LOGIN_ATTEMPTS' AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 10))
-  UNION ALL
-  SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_LOCK_TIME' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 1))
-  ) THEN 
-  '<div style="background: #fff3e0; border-radius: 8px; padding: 15px; margin-bottom: 15px; border-left: 4px solid #f57c00;">' ||
-  '<h6 style="color: #e65100; margin: 0 0 10px 0; font-size: 14px; font-weight: 600;"><span class="material-icons" style="font-size: 18px; vertical-align: middle; margin-right: 6px;">password</span>Password Policy Weaknesses</h6>' ||
-  '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px;">' ||
-  -- No Password Verification
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT'))
-    THEN '<div style="background: white; padding: 10px; border-radius: 6px; border: 1px solid #ffe0b2;">' ||
-    '<div style="display: flex; align-items: center;">' ||
-    '<span class="material-icons" style="color: #f57c00; margin-right: 8px;">no_encryption</span>' ||
-    '<div style="font-size: 13px;"><strong>No Complexity:</strong> ' ||
-    (SELECT COUNT(DISTINCT PROFILE) FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT')) || 
-    ' profiles</div>' ||
-    '</div></div>' ELSE '' END ||
-  '</div></div>' ELSE '' END AS high_password
-FROM DUAL;
-
-PROMPT </div>
-
--- Medium Risks Section with Compact Card Layout
-PROMPT <div style="background: white; border-radius: 12px; padding: 25px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); border-top: 4px solid #fbc02d;">
-PROMPT <h5 style="color: #f9a825; margin: 0 0 20px 0; font-size: 18px;"><span class="material-icons" style="vertical-align: middle; margin-right: 8px;">priority_high</span>Medium Priority Security Issues</h5>
-
--- Medium risks in a more compact grid
-SELECT '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">' ||
-  -- Password Policy Gaps
-  CASE WHEN EXISTS (
-    SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME IN ('PASSWORD_LIFE_TIME','PASSWORD_REUSE_MAX','PASSWORD_GRACE_TIME')
-    AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT')
-  ) THEN 
-    '<div style="background: #fffde7; border-radius: 8px; padding: 15px; border-left: 4px solid #fbc02d;">' ||
-    '<h6 style="color: #f57f17; margin: 0 0 8px 0; font-size: 13px; font-weight: 600;">Password Policy Gaps</h6>' ||
-    '<ul style="margin: 0; padding-left: 20px; font-size: 13px; color: #666;">' ||
-    CASE WHEN EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_REUSE_MAX' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 20)))
-      THEN '<li>Weak password history (<20)</li>' ELSE '' END ||
-    '</ul></div>'
-  ELSE '' END ||
-  -- Audit Configuration
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION IN ('CREATE SESSION','SYSTEM GRANT','USER','PROFILE') AND SUCCESS = 'BY ACCESS')
-  THEN 
-    '<div style="background: #fffde7; border-radius: 8px; padding: 15px; border-left: 4px solid #fbc02d;">' ||
-    '<h6 style="color: #f57f17; margin: 0 0 8px 0; font-size: 13px; font-weight: 600;">Audit Configuration Gaps</h6>' ||
-    '<ul style="margin: 0; padding-left: 20px; font-size: 13px; color: #666;">' ||
-    CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='CREATE SESSION' AND SUCCESS = 'BY ACCESS')
-      THEN '<li>Session audit disabled</li>' ELSE '' END ||
-    CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='SYSTEM GRANT' AND SUCCESS = 'BY ACCESS')
-      THEN '<li>Grant audit disabled</li>' ELSE '' END ||
-    CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION IN ('USER','ALTER USER','DROP USER') AND SUCCESS = 'BY ACCESS')
-      THEN '<li>User management audit gaps</li>' ELSE '' END ||
-    '</ul></div>'
-  ELSE '' END ||
-  -- User Management
-  CASE WHEN EXISTS (
-    SELECT 1 FROM DBA_USERS WHERE PROFILE='DEFAULT' AND ACCOUNT_STATUS='OPEN' AND USERNAME NOT IN ('SYS','SYSTEM','DBSNMP','XDB','ANONYMOUS')
-    UNION ALL
-    SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME IN ('SESSIONS_PER_USER','IDLE_TIME') AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT')
-  ) THEN 
-    '<div style="background: #fffde7; border-radius: 8px; padding: 15px; border-left: 4px solid #fbc02d;">' ||
-    '<h6 style="color: #f57f17; margin: 0 0 8px 0; font-size: 13px; font-weight: 600;">User & Session Management</h6>' ||
-    '<ul style="margin: 0; padding-left: 20px; font-size: 13px; color: #666;">' ||
-    CASE WHEN EXISTS (SELECT 1 FROM DBA_USERS WHERE PROFILE='DEFAULT' AND ACCOUNT_STATUS='OPEN' AND USERNAME NOT IN ('SYS','SYSTEM','DBSNMP','XDB','ANONYMOUS'))
-      THEN '<li>' || (SELECT COUNT(*) FROM DBA_USERS WHERE PROFILE='DEFAULT' AND ACCOUNT_STATUS='OPEN' AND USERNAME NOT IN ('SYS','SYSTEM','DBSNMP','XDB','ANONYMOUS')) || ' users on DEFAULT profile</li>' ELSE '' END ||
-    CASE WHEN EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='SESSIONS_PER_USER' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT'))
-      THEN '<li>Unlimited concurrent sessions</li>' ELSE '' END ||
-    CASE WHEN EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='IDLE_TIME' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT'))
-      THEN '<li>No idle timeout configured</li>' ELSE '' END ||
-    '</ul></div>'
-  ELSE '' END ||
-  '</div>' AS medium_risks
-FROM DUAL;
-
-PROMPT </div>
-
-
--- Modern Risk Summary Dashboard
-PROMPT <h4 style="color: #2c3e50; margin-top: 30px; margin-bottom: 25px; font-size: 20px;"><span class="material-icons" style="vertical-align: middle; margin-right: 10px; font-size: 24px;">dashboard</span>Security Risk Dashboard</h4>
-
--- Risk Score Card
-PROMPT <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 20px; margin-bottom: 30px;">
-
--- Overall Risk Score Section
-PROMPT <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px; padding: 25px; color: white; box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);">
-PROMPT <h5 style="margin: 0 0 15px 0; font-size: 16px; opacity: 0.9;">Overall Security Score</h5>
-
--- Calculate risk score
-SELECT 
-  '<div style="text-align: center;">' ||
-  '<div style="font-size: 48px; font-weight: bold; margin-bottom: 10px;">' ||
-  CASE 
-    WHEN critical_count > 0 THEN 'F'
-    WHEN high_count > 2 THEN 'D'
-    WHEN high_count > 0 OR medium_count > 5 THEN 'C'
-    WHEN medium_count > 2 THEN 'B'
-    ELSE 'A'
-  END || '</div>' ||
-  '<div style="font-size: 14px; opacity: 0.9;">Security Grade</div>' ||
-  '<div style="margin-top: 15px; padding: 10px; background: rgba(255,255,255,0.2); border-radius: 8px;">' ||
-  '<div style="font-size: 12px; margin-bottom: 5px;">Risk Score</div>' ||
-  '<div style="font-size: 24px; font-weight: bold;">' ||
-  CASE 
-    WHEN critical_count > 0 THEN critical_count * 100
-    WHEN high_count > 0 THEN high_count * 50 
-    WHEN medium_count > 0 THEN medium_count * 10
-    ELSE 0
-  END || '</div>' ||
-  '</div>' ||
-  '</div>' ||
-  '</div>' AS score_card
-FROM (
-  SELECT 
-    (SELECT COUNT(*) FROM (
-      SELECT 1 FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%' AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY' AND UPPER(VALUE) NOT IN ('FALSE') AND VALUE IS NOT NULL AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_OS_AUTHENT' AND UPPER(VALUE) != 'FALSE' AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='EXEMPT ACCESS POLICY' AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='SELECT ANY DICTIONARY' AND GRANTEE NOT IN ('DBA','DBSNMP','OEM_MONITOR','OLAPSYS','ORACLE_OCM','SYSMAN','WMSYS') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='ALTER SYSTEM' AND GRANTEE NOT IN ('SYS','SYSTEM','DBA') AND ROWNUM = 1
-      UNION ALL  
-      SELECT 1 FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE='DBA' AND GRANTEE NOT IN ('SYS','SYSTEM','SYSMAN') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_SYS_OPERATIONS' AND UPPER(VALUE) != 'TRUE' AND ROWNUM = 1
-    )) AS critical_count,
-    (SELECT COUNT(*) FROM (
-      SELECT 1 FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME IN ('DBMS_JAVA','DBMS_SCHEDULER','DBMS_SQL','UTL_FILE','UTL_TCP','UTL_HTTP') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE='DBA' AND GRANTEE NOT IN ('SYS','SYSTEM') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE LIKE '%ANY%' AND GRANTEE NOT IN ('DBA','SYS','SYSTEM','IMP_FULL_DATABASE','EXP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE',
-                        'AUDSYS','GGSYS','GSMADMIN_INTERNAL','SYSBACKUP','SYSDG','SYSKM','SYSRAC') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='FAILED_LOGIN_ATTEMPTS' AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 10)) AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'SEC_RETURN_SERVER_RELEASE_BANNER' AND UPPER(VALUE) != 'FALSE' AND ROWNUM = 1
-    )) AS high_count,
-    (SELECT COUNT(*) FROM (
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_LIFE_TIME' AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 180)) AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_USERS WHERE PROFILE='DEFAULT' AND ACCOUNT_STATUS='OPEN' AND USERNAME NOT IN ('SYS','SYSTEM','DBSNMP','XDB','ANONYMOUS') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='CREATE SESSION' AND SUCCESS = 'BY ACCESS') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_LISTENER' AND VALUE IS NOT NULL AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_REUSE_MAX' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 20)) AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM ALL_USERS WHERE USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='SESSIONS_PER_USER' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT') AND ROWNUM = 1
-    )) AS medium_count
-  FROM DUAL
-);
-
--- Risk Summary Table with Visual Indicators
-PROMPT <div style="background: white; border-radius: 12px; padding: 25px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
-PROMPT <h5 style="margin: 0 0 20px 0; color: #2c3e50; font-size: 16px;">Risk Summary by Severity</h5>
-
--- Generate risk table with progress bars
-SELECT '<div style="margin-bottom: 20px;">' ||
-  -- Critical Risks
-  '<div style="display: flex; align-items: center; margin-bottom: 15px;">' ||
-  '<div style="background: #dc3545; width: 48px; height: 48px; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin-right: 15px;">' ||
-  '<span class="material-icons" style="color: white; font-size: 24px;">error</span>' ||
-  '</div>' ||
-  '<div style="flex: 1;">' ||
-  '<div style="display: flex; justify-content: space-between; margin-bottom: 5px;">' ||
-  '<span style="font-weight: 600; color: #dc3545;">Critical Risks</span>' ||
-  '<span style="font-weight: bold; color: #dc3545; font-size: 18px;">' || critical_count || '</span>' ||
-  '</div>' ||
-  '<div style="background: #f8f9fa; height: 8px; border-radius: 4px; overflow: hidden;">' ||
-  '<div style="background: #dc3545; height: 100%; width: ' || 
-  CASE WHEN critical_count = 0 THEN '0' ELSE LEAST(100, critical_count * 20) END || '%; transition: width 0.5s;"></div>' ||
-  '</div>' ||
-  '<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">Immediate action required</div>' ||
-  '</div>' ||
-  '</div>' ||
-  -- High Risks
-  '<div style="display: flex; align-items: center; margin-bottom: 15px;">' ||
-  '<div style="background: #f57c00; width: 48px; height: 48px; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin-right: 15px;">' ||
-  '<span class="material-icons" style="color: white; font-size: 24px;">warning</span>' ||
-  '</div>' ||
-  '<div style="flex: 1;">' ||
-  '<div style="display: flex; justify-content: space-between; margin-bottom: 5px;">' ||
-  '<span style="font-weight: 600; color: #f57c00;">High Risks</span>' ||
-  '<span style="font-weight: bold; color: #f57c00; font-size: 18px;">' || high_count || '</span>' ||
-  '</div>' ||
-  '<div style="background: #f8f9fa; height: 8px; border-radius: 4px; overflow: hidden;">' ||
-  '<div style="background: #f57c00; height: 100%; width: ' || 
-  CASE WHEN high_count = 0 THEN '0' ELSE LEAST(100, high_count * 15) END || '%; transition: width 0.5s;"></div>' ||
-  '</div>' ||
-  '<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">Fix within 1 week</div>' ||
-  '</div>' ||
-  '</div>' ||
-  -- Medium Risks
-  '<div style="display: flex; align-items: center;">' ||
-  '<div style="background: #fbc02d; width: 48px; height: 48px; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin-right: 15px;">' ||
-  '<span class="material-icons" style="color: white; font-size: 24px;">info</span>' ||
-  '</div>' ||
-  '<div style="flex: 1;">' ||
-  '<div style="display: flex; justify-content: space-between; margin-bottom: 5px;">' ||
-  '<span style="font-weight: 600; color: #f9a825;">Medium Risks</span>' ||
-  '<span style="font-weight: bold; color: #f9a825; font-size: 18px;">' || medium_count || '</span>' ||
-  '</div>' ||
-  '<div style="background: #f8f9fa; height: 8px; border-radius: 4px; overflow: hidden;">' ||
-  '<div style="background: #fbc02d; height: 100%; width: ' || 
-  CASE WHEN medium_count = 0 THEN '0' ELSE LEAST(100, medium_count * 10) END || '%; transition: width 0.5s;"></div>' ||
-  '</div>' ||
-  '<div style="font-size: 12px; color: #6c757d; margin-top: 4px;">Fix within 1 month</div>' ||
-  '</div>' ||
-  '</div>' ||
-  '</div>' AS risk_summary_table
-FROM (
-  SELECT 
-    (SELECT COUNT(*) FROM (
-      SELECT 1 FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%' AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY' AND UPPER(VALUE) NOT IN ('FALSE') AND VALUE IS NOT NULL AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_OS_AUTHENT' AND UPPER(VALUE) != 'FALSE' AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='EXEMPT ACCESS POLICY' AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='SELECT ANY DICTIONARY' AND GRANTEE NOT IN ('DBA','DBSNMP','OEM_MONITOR','OLAPSYS','ORACLE_OCM','SYSMAN','WMSYS') AND ROWNUM = 1
-    )) AS critical_count,
-    (SELECT COUNT(*) FROM (
-      SELECT 1 FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME IN ('DBMS_JAVA','DBMS_SCHEDULER','DBMS_SQL','UTL_FILE','UTL_TCP','UTL_HTTP') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='FAILED_LOGIN_ATTEMPTS' AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 10)) AND ROWNUM = 1
-    )) AS high_count,
-    (SELECT COUNT(*) FROM (
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_LIFE_TIME' AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 180)) AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_USERS WHERE PROFILE='DEFAULT' AND ACCOUNT_STATUS='OPEN' AND USERNAME NOT IN ('SYS','SYSTEM','DBSNMP','XDB','ANONYMOUS') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='CREATE SESSION' AND SUCCESS = 'BY ACCESS') AND ROWNUM = 1
-    )) AS medium_count
-  FROM DUAL
-);
-
-PROMPT </div>
-PROMPT </div>
-
-
--- Risk Insights Cards
-PROMPT <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin: 30px 0;">
-
--- Top Risk Areas Card
-SELECT '<div style="background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-top: 3px solid #dc3545;">' ||
-  '<h6 style="margin: 0 0 15px 0; color: #dc3545; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">' ||
-  '<span class="material-icons" style="font-size: 18px; vertical-align: middle; margin-right: 6px;">trending_up</span>Top Risk Areas</h6>' ||
-  '<div style="font-size: 13px; color: #495057;">' ||
-  CASE 
-    WHEN EXISTS (SELECT 1 FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%') 
-    THEN '<div style="padding: 5px 0;"><span class="material-icons" style="font-size: 14px; vertical-align: middle; color: #dc3545;">radio_button_checked</span> Default Passwords</div>'
-    ELSE ''
-  END ||
-  CASE 
-    WHEN EXISTS (SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED'))
-    THEN '<div style="padding: 5px 0;"><span class="material-icons" style="font-size: 14px; vertical-align: middle; color: #dc3545;">radio_button_checked</span> Audit Disabled</div>'
-    ELSE ''
-  END ||
-  CASE 
-    WHEN EXISTS (SELECT 1 FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME IN ('DBMS_JAVA','UTL_FILE','UTL_TCP'))
-    THEN '<div style="padding: 5px 0;"><span class="material-icons" style="font-size: 14px; vertical-align: middle; color: #f57c00;">radio_button_checked</span> Public Privileges</div>'
-    ELSE ''
-  END ||
-  CASE 
-    WHEN EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT'))
-    THEN '<div style="padding: 5px 0;"><span class="material-icons" style="font-size: 14px; vertical-align: middle; color: #f57c00;">radio_button_checked</span> Weak Passwords</div>'
-    ELSE ''
-  END ||
-  '</div></div>' AS top_risks
-FROM DUAL;
-
--- Compliance Status Card  
-SELECT '<div style="background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-top: 3px solid #17a2b8;">' ||
-  '<h6 style="margin: 0 0 15px 0; color: #17a2b8; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">' ||
-  '<span class="material-icons" style="font-size: 18px; vertical-align: middle; margin-right: 6px;">verified</span>Compliance Status</h6>' ||
-  '<div style="font-size: 13px; color: #495057;">' ||
-  '<div style="padding: 5px 0;">CIS Benchmark Coverage: <strong>' || 
-  CASE 
-    WHEN critical_count = 0 AND high_count = 0 AND medium_count < 3 THEN '95%+ Compliant'
-    WHEN critical_count = 0 AND high_count < 3 THEN '80-95% Compliant'
-    WHEN critical_count < 2 THEN '60-80% Compliant'
-    ELSE '<span style="color: #dc3545;">Below 60%</span>'
-  END || '</strong></div>' ||
-  '<div style="padding: 5px 0;">Total Issues: <strong style="color: #dc3545;">' || (critical_count + high_count + medium_count) || '</strong></div>' ||
-  '<div style="padding: 5px 0;">Next Audit: <strong>30 Days</strong></div>' ||
-  '</div></div>' AS compliance_status
-FROM (
-  SELECT 
-    (SELECT COUNT(*) FROM (
-      SELECT 1 FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%' AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='EXEMPT ACCESS POLICY' AND ROWNUM = 1
-    )) AS critical_count,
-    (SELECT COUNT(*) FROM (
-      SELECT 1 FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME IN ('DBMS_JAVA','UTL_FILE') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT') AND ROWNUM = 1
-    )) AS high_count,
-    (SELECT COUNT(*) FROM (
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_LIFE_TIME' AND (LIMIT = 'UNLIMITED') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_USERS WHERE PROFILE='DEFAULT' AND ACCOUNT_STATUS='OPEN' AND USERNAME NOT IN ('SYS','SYSTEM') AND ROWNUM = 1
-    )) AS medium_count
-  FROM DUAL
-);
-
--- Action Priority Card
-SELECT '<div style="background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-top: 3px solid #28a745;">' ||
-  '<h6 style="margin: 0 0 15px 0; color: #28a745; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">' ||
-  '<span class="material-icons" style="font-size: 18px; vertical-align: middle; margin-right: 6px;">task_alt</span>Action Priority</h6>' ||
-  '<div style="font-size: 13px; color: #495057;">' ||
-  CASE 
-    WHEN critical_count > 0 THEN
-      '<div style="padding: 8px; background: #ffebee; border-radius: 6px; margin-bottom: 8px;">' ||
-      '<strong style="color: #dc3545;">1. Fix Critical Issues Now</strong><br>' ||
-      '<span style="font-size: 12px;">Default passwords, audit disabled</span></div>'
-    ELSE ''
-  END ||
-  CASE 
-    WHEN high_count > 0 THEN
-      '<div style="padding: 8px; background: #fff3e0; border-radius: 6px; margin-bottom: 8px;">' ||
-      '<strong style="color: #f57c00;">' || CASE WHEN critical_count > 0 THEN '2' ELSE '1' END || '. Address High Risks</strong><br>' ||
-      '<span style="font-size: 12px;">Public privileges, password policies</span></div>'
-    ELSE ''
-  END ||
-  CASE 
-    WHEN medium_count > 0 THEN
-      '<div style="padding: 8px; background: #fffde7; border-radius: 6px;">' ||
-      '<strong style="color: #f9a825;">' || CASE WHEN critical_count + high_count > 0 THEN '3' ELSE '1' END || '. Schedule Medium Fixes</strong><br>' ||
-      '<span style="font-size: 12px;">Profile management, auditing</span></div>'
-    ELSE ''
-  END ||
-  CASE 
-    WHEN critical_count = 0 AND high_count = 0 AND medium_count = 0 THEN
-      '<div style="padding: 8px; background: #e8f5e9; border-radius: 6px;">' ||
-      '<strong style="color: #28a745;">All Clear!</strong><br>' ||
-      '<span style="font-size: 12px;">No significant risks detected</span></div>'
-    ELSE ''
-  END ||
-  '</div></div>' AS action_priority
-FROM (
-  SELECT 
-    (SELECT COUNT(*) FROM (
-      SELECT 1 FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%' AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED') AND ROWNUM = 1
-    )) AS critical_count,
-    (SELECT COUNT(*) FROM (
-      SELECT 1 FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME IN ('DBMS_JAVA','UTL_FILE') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT') AND ROWNUM = 1
-    )) AS high_count,
-    (SELECT COUNT(*) FROM (
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_LIFE_TIME' AND (LIMIT = 'UNLIMITED') AND ROWNUM = 1
-      UNION ALL
-      SELECT 1 FROM DBA_USERS WHERE PROFILE='DEFAULT' AND ACCOUNT_STATUS='OPEN' AND USERNAME NOT IN ('SYS','SYSTEM') AND ROWNUM = 1
-    )) AS medium_count
-  FROM DUAL
-);
-
-PROMPT </div>
-
--- Dynamic Remediation Action Plan Based on Findings
-PROMPT <h3 id="remediation_plan">Security Remediation Action Plan</h3>
-PROMPT <div style="background-color: #e7f3ff; padding: 15px; border-radius: 5px; margin: 10px 0;">
-
--- Generate IMMEDIATE ACTIONS based on critical findings
-SELECT '<h4 style="color: #c62828; margin-top: 0;"><span class="material-icons" style="color: #c62828; vertical-align: middle; margin-right: 8px;">error_outline</span>CRITICAL - IMMEDIATE ACTIONS (Within 24 Hours)</h4>' ||
-  '<ol style="margin-bottom: 20px;">' ||
-  -- Default passwords check
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%') THEN
-    '<li style="background-color: #ffebee; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #c62828;">' ||
-    '<strong style="color: #c62828;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">lock_open</span>Change All Default Passwords</strong><br>' ||
-    '<div style="margin-top: 8px;">Affected users: <code>' || 
-    (SELECT LISTAGG(USERNAME, ', ') WITHIN GROUP (ORDER BY USERNAME) 
-     FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%' AND ROWNUM <= 10) || 
-    CASE WHEN (SELECT COUNT(*) FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%') > 10 
-      THEN ' (and ' || ((SELECT COUNT(*) FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%') - 10) || ' more)' 
-      ELSE '' END || '</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #c62828;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Run: <code>SELECT username FROM dba_users_with_defpwd WHERE username NOT LIKE ''%XS$NULL%'';</code><br>' ||
-    '2. Execute: <code>ALTER USER &lt;username&gt; IDENTIFIED BY "&lt;ComplexPassword123!&gt;" PASSWORD EXPIRE;</code><br>' ||
-    '3. Document password changes and notify users</div></li>'
-  ELSE '' END ||
-  -- Audit trail check
-  CASE WHEN EXISTS (SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL' 
-    AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED')) THEN
-    '<li style="background-color: #ffebee; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #c62828;">' ||
-    '<strong style="color: #c62828;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">policy</span>Enable Database Auditing</strong><br>' ||
-    '<div style="margin-top: 8px;">Current Setting: <code>' || 
-    NVL((SELECT VALUE FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL'), 'NONE') || '</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #dc3545;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Set: <code>ALTER SYSTEM SET AUDIT_TRAIL=DB,EXTENDED SCOPE=SPFILE;</code><br>' ||
-    '2. Enable: <code>AUDIT SESSION;</code> and <code>AUDIT SYSTEM GRANT;</code><br>' ||
-    '3. Restart database to activate<br>' ||
-    '4. Configure audit log management and retention</div></li>'
-  ELSE '' END ||
-  -- Dictionary accessibility check
-  CASE WHEN EXISTS (SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY' 
-    AND UPPER(VALUE) NOT IN ('FALSE') AND VALUE IS NOT NULL) THEN
-    '<li style="background-color: #ffebee; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #c62828;">' ||
-    '<strong style="color: #c62828;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">block</span>Disable Dictionary Access</strong><br>' ||
-    '<div style="margin-top: 8px;">Current Setting: <code>' || 
-    (SELECT VALUE FROM V$PARAMETER WHERE UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY') || '</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #dc3545;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Set: <code>ALTER SYSTEM SET O7_DICTIONARY_ACCESSIBILITY=FALSE SCOPE=SPFILE;</code><br>' ||
-    '2. Restart database<br>' ||
-    '3. Test application compatibility</div></li>'
-  ELSE '' END ||
-  -- Remote OS authentication check
-  CASE WHEN EXISTS (SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_OS_AUTHENT' AND UPPER(VALUE) != 'FALSE') THEN
-    '<li style="background-color: #ffebee; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #c62828;">' ||
-    '<strong style="color: #c62828;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">vpn_lock</span>Disable Remote OS Authentication</strong><br>' ||
-    '<div style="margin-top: 8px;">Current Setting: <code>' || 
-    (SELECT VALUE FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_OS_AUTHENT') || '</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #dc3545;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Set: <code>ALTER SYSTEM SET REMOTE_OS_AUTHENT=FALSE SCOPE=SPFILE;</code><br>' ||
-    '2. Restart database<br>' ||
-    '3. Review and update authentication methods</div></li>'
-  ELSE '' END ||
-  -- EXEMPT ACCESS POLICY check
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='EXEMPT ACCESS POLICY') THEN
-    '<li style="background-color: #ffebee; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #c62828;">' ||
-    '<strong style="color: #c62828;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">remove_moderator</span>Revoke EXEMPT ACCESS POLICY Privilege</strong><br>' ||
-    '<div style="margin-top: 8px;">Granted to: <code>' || 
-    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) 
-     FROM DBA_SYS_PRIVS WHERE PRIVILEGE='EXEMPT ACCESS POLICY' AND ROWNUM <= 5) || '</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #c62828;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Review: <code>SELECT grantee FROM dba_sys_privs WHERE privilege=''EXEMPT ACCESS POLICY'';</code><br>' ||
-    '2. Revoke: <code>REVOKE EXEMPT ACCESS POLICY FROM &lt;grantee&gt;;</code><br>' ||
-    '3. Document security policy bypass requirements</div></li>'
-  ELSE '' END ||
-  '</ol>' ||
-  -- If no critical issues found
-  CASE WHEN NOT EXISTS (
-    SELECT 1 FROM (
-      SELECT 1 FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%'
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED')
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY' AND UPPER(VALUE) NOT IN ('FALSE') AND VALUE IS NOT NULL
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_OS_AUTHENT' AND UPPER(VALUE) != 'FALSE'
-      UNION ALL
-      SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE='EXEMPT ACCESS POLICY'
-    ) WHERE ROWNUM = 1
-  ) THEN 
-    '<p style="color: green; padding: 10px; background-color: #e8f5e9; border-radius: 4px;">' ||
-    '<span class="material-icons" style="vertical-align: middle;">check_circle</span> ' ||
-    'No critical security issues requiring immediate action were found.</p>'
-  ELSE '' END
-FROM DUAL;
-
--- Generate HIGH PRIORITY ACTIONS based on high-risk findings
-SELECT '<h4 style="color: #ef6c00;"><span class="material-icons" style="color: #ef6c00; vertical-align: middle; margin-right: 8px;">warning</span>HIGH PRIORITY (Within 1 Week)</h4>' ||
-  '<ol style="margin-bottom: 20px;">' ||
-  -- Dangerous PUBLIC privileges check
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' 
-    AND TABLE_NAME IN ('DBMS_JAVA','DBMS_SCHEDULER','DBMS_SQL','UTL_FILE','UTL_TCP','UTL_HTTP')) THEN
-    '<li style="background-color: #ffe0b2; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #ef6c00;">' ||
-    '<strong style="color: #ef6c00;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">security</span>Revoke Dangerous PUBLIC Privileges</strong><br>' ||
-    '<div style="margin-top: 8px;">Packages with PUBLIC EXECUTE: <code>' || 
-    (SELECT LISTAGG(TABLE_NAME, ', ') WITHIN GROUP (ORDER BY 
-      CASE TABLE_NAME 
-        WHEN 'DBMS_JAVA' THEN 1 
-        WHEN 'UTL_FILE' THEN 2 
-        WHEN 'UTL_TCP' THEN 3
-        WHEN 'UTL_HTTP' THEN 4
-        WHEN 'DBMS_SCHEDULER' THEN 5
-        WHEN 'DBMS_SQL' THEN 6
-        WHEN 'UTL_SMTP' THEN 7
-        ELSE 8 END)
-     FROM DBA_TAB_PRIVS 
-     WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' 
-     AND TABLE_NAME IN ('DBMS_JAVA','DBMS_SCHEDULER','DBMS_SQL','UTL_FILE','UTL_TCP','UTL_HTTP','UTL_SMTP','UTL_MAIL','DBMS_RANDOM','DBMS_LOB','DBMS_XMLGEN','DBMS_XMLQUERY','UTL_INADDR','DBMS_JOB','DBMS_LDAP','DBMS_OBFUSCATION_TOOLKIT','DBMS_ADVISOR','HTTPURITYPE')
-     AND ROWNUM <= 20) || '</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #ef6c00;">' ||
-    '<strong>Remediation Script:</strong><br>' ||
-    '<pre style="background-color: #f5f5f5; padding: 8px; border-radius: 4px; overflow-x: auto; font-size: 12px;">' ||
-    '-- Critical packages (high risk)' || CHR(10) ||
-    'REVOKE EXECUTE ON DBMS_JAVA FROM PUBLIC;' || CHR(10) ||
-    'REVOKE EXECUTE ON UTL_FILE FROM PUBLIC;' || CHR(10) ||
-    'REVOKE EXECUTE ON UTL_TCP FROM PUBLIC;' || CHR(10) ||
-    'REVOKE EXECUTE ON UTL_HTTP FROM PUBLIC;' || CHR(10) ||
-    'REVOKE EXECUTE ON DBMS_SCHEDULER FROM PUBLIC;' || CHR(10) ||
-    'REVOKE EXECUTE ON DBMS_SQL FROM PUBLIC;' || CHR(10) ||
-    CHR(10) || '-- Additional dangerous packages' || CHR(10) ||
-    'REVOKE EXECUTE ON UTL_SMTP FROM PUBLIC;' || CHR(10) ||
-    'REVOKE EXECUTE ON DBMS_LOB FROM PUBLIC;' || CHR(10) ||
-    'REVOKE EXECUTE ON DBMS_RANDOM FROM PUBLIC;' || CHR(10) ||
-    CHR(10) || '-- Generate full list:' || CHR(10) ||
-    'SELECT ''REVOKE EXECUTE ON '' || table_name || '' FROM PUBLIC;''' || CHR(10) ||
-    'FROM dba_tab_privs WHERE grantee=''PUBLIC'' AND privilege=''EXECUTE'';' ||
-    '</pre>' ||
-    '<strong>Post-Revoke Action:</strong> Grant execute privileges only to specific users/roles that require them for legitimate business functions.</div></li>'
-  ELSE '' END ||
-  -- Password policy check
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' 
-    AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT')) THEN
-    '<li style="background-color: #ffe0b2; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #ef6c00;">' ||
-    '<strong style="color: #ef6c00;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">password</span>Implement Strong Password Policies</strong><br>' ||
-    '<div style="margin-top: 8px;">Profiles without password verification: <code>' || 
-    (SELECT LISTAGG(DISTINCT PROFILE, ', ') WITHIN GROUP (ORDER BY PROFILE)
-     FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' 
-     AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT') AND ROWNUM <= 5) || '</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #e67e22;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Create: <code>CREATE PROFILE SECURE_PROFILE LIMIT FAILED_LOGIN_ATTEMPTS 3 PASSWORD_LOCK_TIME 1;</code><br>' ||
-    '2. Set: <code>ALTER PROFILE SECURE_PROFILE LIMIT PASSWORD_VERIFY_FUNCTION ' ||
-    CASE WHEN (SELECT version FROM v$instance) LIKE '12.%' OR (SELECT version FROM v$instance) LIKE '18.%' OR (SELECT version FROM v$instance) LIKE '19.%'
-      THEN 'ORA12C_VERIFY_FUNCTION' ELSE 'VERIFY_FUNCTION_11G' END || ';</code><br>' ||
-    '3. Apply: <code>ALTER USER &lt;username&gt; PROFILE SECURE_PROFILE;</code></div></li>'
-  ELSE '' END ||
-  -- DBA role check
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE='DBA' 
-    AND GRANTEE NOT IN ('SYS','SYSTEM','SYSMAN')) THEN
-    '<li style="background-color: #ffe0b2; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #ef6c00;">' ||
-    '<strong style="color: #ef6c00;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">admin_panel_settings</span>Review Excessive DBA Privileges</strong><br>' ||
-    '<div style="margin-top: 8px;">Non-system users with DBA role: <code>' || 
-    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE)
-     FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE='DBA' 
-     AND GRANTEE NOT IN ('SYS','SYSTEM','SYSMAN') AND ROWNUM <= 10) || '</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #e67e22;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Review: <code>SELECT grantee FROM dba_role_privs WHERE granted_role=''DBA'';</code><br>' ||
-    '2. Revoke: <code>REVOKE DBA FROM &lt;user&gt;;</code><br>' ||
-    '3. Grant specific privileges based on actual requirements</div></li>'
-  ELSE '' END ||
-  -- ANY privileges check with Oracle account filtering
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE LIKE '%ANY%' 
-    AND GRANTEE NOT IN ('DBA','SYS','SYSTEM','IMP_FULL_DATABASE','EXP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE',
-                        'AUDSYS','GGSYS','GSMADMIN_INTERNAL','SYSBACKUP','SYSDG','SYSKM','SYSRAC','XDB','CTXSYS',
-                        'MDSYS','OLAPSYS','ORDSYS','WMSYS','APEX_PUBLIC_USER','FLOWS_FILES','ANONYMOUS',
-                        'SPATIAL_CSW_ADMIN_USR','SPATIAL_WFS_ADMIN_USR','MDDATA','ORACLE_OCM','ORDDATA',
-                        'ORDPLUGINS','SI_INFORMTN_SCHEMA','SYSMAN','MGMT_VIEW','DBSNMP')) THEN
-    '<li style="background-color: #ffe0b2; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #ef6c00;">' ||
-    '<strong style="color: #ef6c00;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">admin_panel_settings</span>Review ANY System Privileges</strong><br>' ||
-    '<div style="margin-top: 8px;">Non-Oracle users with ANY privileges: <code>' || 
-    (SELECT LISTAGG(GRANTEE, ', ') WITHIN GROUP (ORDER BY GRANTEE) 
-     FROM (SELECT DISTINCT GRANTEE FROM DBA_SYS_PRIVS WHERE PRIVILEGE LIKE '%ANY%' 
-           AND GRANTEE NOT IN ('DBA','SYS','SYSTEM','IMP_FULL_DATABASE','EXP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE',
-                              'AUDSYS','GGSYS','GSMADMIN_INTERNAL','SYSBACKUP','SYSDG','SYSKM','SYSRAC','XDB','CTXSYS',
-                              'MDSYS','OLAPSYS','ORDSYS','WMSYS','APEX_PUBLIC_USER','FLOWS_FILES','ANONYMOUS',
-                              'SPATIAL_CSW_ADMIN_USR','SPATIAL_WFS_ADMIN_USR','MDDATA','ORACLE_OCM','ORDDATA',
-                              'ORDPLUGINS','SI_INFORMTN_SCHEMA','SYSMAN','MGMT_VIEW','DBSNMP')
-           AND ROWNUM <= 10)) || 
-    CASE WHEN (SELECT COUNT(DISTINCT GRANTEE) FROM DBA_SYS_PRIVS WHERE PRIVILEGE LIKE '%ANY%' 
-               AND GRANTEE NOT IN ('DBA','SYS','SYSTEM','IMP_FULL_DATABASE','EXP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE',
-                                  'AUDSYS','GGSYS','GSMADMIN_INTERNAL','SYSBACKUP','SYSDG','SYSKM','SYSRAC','XDB','CTXSYS',
-                                  'MDSYS','OLAPSYS','ORDSYS','WMSYS','APEX_PUBLIC_USER','FLOWS_FILES','ANONYMOUS',
-                                  'SPATIAL_CSW_ADMIN_USR','SPATIAL_WFS_ADMIN_USR','MDDATA','ORACLE_OCM','ORDDATA',
-                                  'ORDPLUGINS','SI_INFORMTN_SCHEMA','SYSMAN','MGMT_VIEW','DBSNMP')) > 10
-      THEN ' (and more)' ELSE '' END || '</code></div>' ||
-    '<div style="margin-top: 8px; background-color: #ffe0b2; padding: 8px; border-radius: 4px;">' ||
-    '<strong>Oracle System Accounts Note:</strong> Oracle-supplied accounts like AUDSYS, GGSYS, SYSBACKUP, etc., have been excluded from this check. ' ||
-    'Consider locking unused Oracle accounts: <code>ALTER USER &lt;oracle_account&gt; ACCOUNT LOCK;</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #ef6c00;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Review non-Oracle users: <code>SELECT grantee, privilege FROM dba_sys_privs WHERE privilege LIKE ''%ANY%'' AND grantee NOT IN (Oracle system accounts);</code><br>' ||
-    '2. Apply principle of least privilege - revoke unnecessary ANY privileges<br>' ||
-    '3. Replace with object-specific grants where possible<br>' ||
-    '4. Lock unused Oracle system accounts to reduce attack surface</div></li>'
-  ELSE '' END ||
-  -- Failed login attempts check
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='FAILED_LOGIN_ATTEMPTS' 
-    AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 10))) THEN
-    '<li style="background-color: #ffe0b2; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #ef6c00;">' ||
-    '<strong style="color: #ef6c00;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">lock_clock</span>Configure Account Lockout Policy</strong><br>' ||
-    '<div style="margin-top: 8px;">Weak lockout settings in profiles: <code>' || 
-    (SELECT LISTAGG(PROFILE || ' (' || LIMIT || ')', ', ') WITHIN GROUP (ORDER BY PROFILE)
-     FROM DBA_PROFILES WHERE RESOURCE_NAME='FAILED_LOGIN_ATTEMPTS' 
-     AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 10))
-     AND ROWNUM <= 5) || '</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #e67e22;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Set: <code>ALTER PROFILE DEFAULT LIMIT FAILED_LOGIN_ATTEMPTS 5;</code><br>' ||
-    '2. Set: <code>ALTER PROFILE DEFAULT LIMIT PASSWORD_LOCK_TIME 1;</code><br>' ||
-    '3. Monitor failed login attempts in audit trail</div></li>'
-  ELSE '' END ||
-  '</ol>' ||
-  -- If no high priority issues found
-  CASE WHEN NOT EXISTS (
-    SELECT 1 FROM (
-      SELECT 1 FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' 
-        AND TABLE_NAME IN ('DBMS_JAVA','DBMS_SCHEDULER','DBMS_SQL','UTL_FILE','UTL_TCP','UTL_HTTP')
-      UNION ALL
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT')
-      UNION ALL
-      SELECT 1 FROM DBA_ROLE_PRIVS WHERE GRANTED_ROLE='DBA' AND GRANTEE NOT IN ('SYS','SYSTEM','SYSMAN')
-      UNION ALL
-      SELECT 1 FROM DBA_SYS_PRIVS WHERE PRIVILEGE LIKE '%ANY%' 
-        AND GRANTEE NOT IN ('DBA','SYS','SYSTEM','IMP_FULL_DATABASE','EXP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE')
-      UNION ALL
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='FAILED_LOGIN_ATTEMPTS' 
-        AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 10))
-    ) WHERE ROWNUM = 1
-  ) THEN 
-    '<p style="color: #e67e22; padding: 10px; background-color: #fff3cd; border-radius: 4px;">' ||
-    '<span class="material-icons" style="vertical-align: middle;">check_circle</span> ' ||
-    'No high priority security issues were found.</p>'
-  ELSE '' END
-FROM DUAL;
-
--- Generate MEDIUM PRIORITY ACTIONS based on medium-risk findings
-SELECT '<h4 style="color: #f9a825;"><span class="material-icons" style="color: #f9a825; vertical-align: middle; margin-right: 8px;">schedule</span>MEDIUM PRIORITY (Within 1 Month)</h4>' ||
-  '<ol style="margin-bottom: 20px;">' ||
-  -- Audit configuration check
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='CREATE SESSION' AND SUCCESS = 'BY ACCESS') 
-    OR NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='SYSTEM GRANT' AND SUCCESS = 'BY ACCESS') THEN
-    '<li style="background-color: #fff9c4; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #f9a825;">' ||
-    '<strong style="color: #f9a825;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">track_changes</span>Complete Audit Configuration</strong><br>' ||
-    '<div style="margin-top: 8px;">Missing audit options: ' ||
-    CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='CREATE SESSION') 
-      THEN '<code>CREATE SESSION</code> ' ELSE '' END ||
-    CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='SYSTEM GRANT') 
-      THEN '<code>SYSTEM GRANT</code> ' ELSE '' END || '</div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #f39c12;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Enable: <code>AUDIT SESSION; AUDIT SYSTEM GRANT; AUDIT USER;</code><br>' ||
-    '2. Configure: <code>AUDIT ROLE; AUDIT PROFILE; AUDIT DATABASE LINK;</code><br>' ||
-    '3. Set up audit log management and retention policies</div></li>'
-  ELSE '' END ||
-  -- Sample users check
-  CASE WHEN EXISTS (SELECT 1 FROM ALL_USERS WHERE USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH')) THEN
-    '<li style="background-color: #fff9c4; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #f9a825;">' ||
-    '<strong style="color: #f9a825;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">person_remove</span>Remove Sample Users</strong><br>' ||
-    '<div style="margin-top: 8px;">Sample users found: <code>' || 
-    (SELECT LISTAGG(USERNAME, ', ') WITHIN GROUP (ORDER BY USERNAME)
-     FROM ALL_USERS WHERE USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH')) || '</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #f39c12;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Execute: <code>$ORACLE_HOME/demo/schema/drop_sch.sql</code><br>' ||
-    '2. Or manually: <code>DROP USER SCOTT CASCADE;</code><br>' ||
-    '3. Verify removal and update documentation</div></li>'
-  ELSE '' END ||
-  -- Default profile usage check
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_USERS WHERE PROFILE='DEFAULT' AND ACCOUNT_STATUS='OPEN' 
-    AND USERNAME NOT IN ('SYS','SYSTEM','DBSNMP','XDB','ANONYMOUS')) THEN
-    '<li style="background-color: #fff9c4; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #f9a825;">' ||
-    '<strong style="color: #f9a825;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">manage_accounts</span>Assign Custom Profiles to Users</strong><br>' ||
-    '<div style="margin-top: 8px;">Users with DEFAULT profile: <code>' || 
-    (SELECT COUNT(*) FROM DBA_USERS WHERE PROFILE='DEFAULT' AND ACCOUNT_STATUS='OPEN' 
-     AND USERNAME NOT IN ('SYS','SYSTEM','DBSNMP','XDB','ANONYMOUS')) || ' users</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #f39c12;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Create custom profiles for different user types<br>' ||
-    '2. Assign: <code>ALTER USER &lt;username&gt; PROFILE &lt;custom_profile&gt;;</code><br>' ||
-    '3. Implement role-based security model</div></li>'
-  ELSE '' END ||
-  -- Password lifetime check
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_LIFE_TIME' 
-    AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 180))) THEN
-    '<li style="background-color: #fff9c4; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #f9a825;">' ||
-    '<strong style="color: #f9a825;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">update</span>Configure Password Expiration</strong><br>' ||
-    '<div style="margin-top: 8px;">Profiles with long/unlimited password lifetime: <code>' || 
-    (SELECT LISTAGG(PROFILE || ' (' || LIMIT || ')', ', ') WITHIN GROUP (ORDER BY PROFILE)
-     FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_LIFE_TIME' 
-     AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 180))
-     AND ROWNUM <= 5) || '</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #f39c12;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Set: <code>ALTER PROFILE DEFAULT LIMIT PASSWORD_LIFE_TIME 90;</code><br>' ||
-    '2. Set: <code>ALTER PROFILE DEFAULT LIMIT PASSWORD_GRACE_TIME 5;</code><br>' ||
-    '3. Implement password change notification process</div></li>'
-  ELSE '' END ||
-  -- Session limits check
-  CASE WHEN EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='SESSIONS_PER_USER' 
-    AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT')) THEN
-    '<li style="background-color: #fff9c4; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #f9a825;">' ||
-    '<strong style="color: #f9a825;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">timer</span>Configure Session and Resource Limits</strong><br>' ||
-    '<div style="margin-top: 8px;">Profiles without session limits: <code>' || 
-    (SELECT COUNT(DISTINCT PROFILE) FROM DBA_PROFILES WHERE RESOURCE_NAME='SESSIONS_PER_USER' 
-     AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT')) || ' profiles</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #f39c12;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Set: <code>ALTER PROFILE DEFAULT LIMIT SESSIONS_PER_USER 5;</code><br>' ||
-    '2. Set: <code>ALTER PROFILE DEFAULT LIMIT IDLE_TIME 30;</code><br>' ||
-    '3. Configure limits based on user roles and requirements</div></li>'
-  ELSE '' END ||
-  -- Remote listener check
-  CASE WHEN EXISTS (SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_LISTENER' AND VALUE IS NOT NULL) THEN
-    '<li style="background-color: #fff9c4; padding: 10px; margin: 5px 0; border-radius: 4px; border-left: 4px solid #f9a825;">' ||
-    '<strong style="color: #f9a825;"><span class="material-icons" style="font-size: 16px; vertical-align: middle;">router</span>Review Remote Listener Configuration</strong><br>' ||
-    '<div style="margin-top: 8px;">Remote listener configured: <code>' || 
-    (SELECT VALUE FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_LISTENER') || '</code></div>' ||
-    '<div style="background-color: white; padding: 8px; margin-top: 8px; border-left: 3px solid #f39c12;">' ||
-    '<strong>Remediation Steps:</strong><br>' ||
-    '1. Review necessity of remote listener<br>' ||
-    '2. If not needed: <code>ALTER SYSTEM SET REMOTE_LISTENER='''' SCOPE=BOTH;</code><br>' ||
-    '3. If needed, ensure secure configuration with SSL/TLS</div></li>'
-  ELSE '' END ||
-  '</ol>' ||
-  -- If no medium priority issues found
-  CASE WHEN NOT EXISTS (
-    SELECT 1 FROM (
-      SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION IN ('CREATE SESSION','SYSTEM GRANT') AND SUCCESS = 'BY ACCESS'
-      UNION ALL
-      SELECT 1 FROM ALL_USERS WHERE USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH')
-      UNION ALL
-      SELECT 1 FROM DBA_USERS WHERE PROFILE='DEFAULT' AND ACCOUNT_STATUS='OPEN' 
-        AND USERNAME NOT IN ('SYS','SYSTEM','DBSNMP','XDB','ANONYMOUS')
-      UNION ALL
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_LIFE_TIME' 
-        AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 180))
-      UNION ALL
-      SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='SESSIONS_PER_USER' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT')
-      UNION ALL
-      SELECT 1 FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_LISTENER' AND VALUE IS NOT NULL
-    ) WHERE ROWNUM = 1
-  ) THEN 
-    '<p style="color: #f39c12; padding: 10px; background-color: #fff8e1; border-radius: 4px;">' ||
-    '<span class="material-icons" style="vertical-align: middle;">check_circle</span> ' ||
-    'No medium priority security issues were found.</p>'
-  ELSE '' END
-FROM DUAL;
-
-PROMPT <h4 style="color: #17a2b8;"><span class="material-icons" style="color: #17a2b8;">info</span>ONGOING SECURITY PRACTICES</h4>
-PROMPT <ul style="margin-bottom: 20px;">
-PROMPT <li><strong>Regular Security Assessments</strong> - Run this CIS audit monthly</li>
-PROMPT <li><strong>Patch Management</strong> - Apply Oracle Critical Patch Updates quarterly</li>
-PROMPT <li><strong>Monitoring & Alerting</strong> - Set up automated alerts for security events</li>
-PROMPT <li><strong>Backup Security</strong> - Encrypt backups and secure backup credentials</li>
-PROMPT <li><strong>Documentation</strong> - Maintain security configuration baselines</li>
-PROMPT <li><strong>Training</strong> - Regular security awareness for database administrators</li>
-PROMPT </ul>
-
-PROMPT <div style="background-color: #fff3cd; padding: 10px; border-left: 4px solid #ffc107; margin: 15px 0;">
-PROMPT <strong><span class="material-icons" style="color: #ffc107;">info</span>Important Notes:</strong><br>
-PROMPT • Always test changes in development environment first<br>
-PROMPT • Some parameter changes require database restart<br>
-PROMPT • Document all changes for compliance and rollback purposes<br>
-PROMPT • Consider impact on applications before revoking privileges
-PROMPT </div>
-
-PROMPT </div>
-
--- Footer
-PROMPT <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #dee2e6; font-size: 12px; color: #6c757d;">
-SELECT '<p><strong>Report Generated:</strong> ' || TO_CHAR(SYSDATE, 'DD-MON-YYYY HH24:MI:SS') || 
+PROMPT <div style="margin-top: 40px; padding-top: 20px; border-top: 2px solid #dee2e6; font-size: 12px; color: #607d8b;">
+SELECT '<p><strong>Report Generated:</strong> ' || TO_CHAR(SYSDATE, 'DD-MON-YYYY HH24:MI:SS') ||
        ' | <strong>Database:</strong> ' || SYS_CONTEXT('USERENV', 'DB_NAME') ||
        ' | <strong>Instance:</strong> ' || SYS_CONTEXT('USERENV', 'INSTANCE_NAME') || '</p>' FROM DUAL;
--- Dynamic disclaimer based on version
-SELECT '<p><strong>Disclaimer:</strong> This report is based on ' ||
+SELECT '<p><strong>Benchmark Reference:</strong> ' ||
   CASE 
-    WHEN version LIKE '19.%' THEN 'CIS Oracle Database 19c Benchmark v1.0.0'
-    WHEN version LIKE '18.%' THEN 'CIS Oracle Database 18c Benchmark v1.0.0'
-    WHEN version LIKE '12.%' THEN 'CIS Oracle Database 12c Benchmark v2.0.0'
+    WHEN version LIKE '19.%' THEN 'CIS Oracle Database 19c Benchmark v1.2.0'
+    WHEN version LIKE '18.%' THEN 'CIS Oracle Database 18c Benchmark v1.1.0'
+    WHEN version LIKE '12.%' THEN 'CIS Oracle Database 12c Benchmark v3.0.0'
     WHEN version LIKE '11.2%' THEN 'CIS Oracle Database 11g R2 Benchmark v2.2.0'
     ELSE 'CIS Oracle Database Benchmark'
-  END ||
-  '. Some checks require manual verification of configuration files or additional privileges. Please review all findings and implement appropriate remediation steps based on your environment and security requirements.</p>'
+  END || '.</p>'
+  || '<p>Validate findings against business requirements and test all fixes prior to production deployment.</p>'
 FROM v$instance;
-PROMPT <p><strong>Note:</strong> This audit tool checks a subset of the complete CIS benchmark. For comprehensive security assessment, consider using commercial database security tools or consulting with Oracle security specialists.</p>
 PROMPT </div>
-
 PROMPT </div>
 PROMPT </body>
 PROMPT </html>
-
 SPOOL OFF
 SET TERMOUT ON
 SET HEADING ON
@@ -12003,507 +11495,604 @@ SET LINESIZE 80
 
 -- ============================================================================
 -- DISPLAY COMPREHENSIVE REMEDIATION COMMANDS
--- Output all SQL commands needed to fix identified CIS benchmark issues
+-- Structured remediation output aligned with CIS report sections
 -- ============================================================================
 
-PROMPT
-PROMPT ============================================================================
-PROMPT                    CIS BENCHMARK REMEDIATION COMMANDS
-PROMPT          SQL Commands to Fix All Identified Security Issues
-PROMPT              (Copy and paste the commands below)
-PROMPT ============================================================================
-PROMPT
-
--- Configure SQL*Plus for clean remediation output (no row counts, no headers)
-SET FEEDBACK OFF
+SET TERMOUT ON
 SET HEADING OFF
+SET FEEDBACK OFF
 SET PAGESIZE 0
-SET LINESIZE 4000
+SET LINESIZE 200
 SET TRIMSPOOL ON
-SET VERIFY OFF
 
-PROMPT -- ============================================================================
-PROMPT -- WARNING: Review and test all commands before execution!
-PROMPT -- Some changes require database restart and may impact applications.
-PROMPT -- Execute in development environment first as SYSDBA.
-PROMPT --
-PROMPT -- CIS MULTITENANT DATABASE REQUIREMENTS:
-PROMPT -- Per CIS Oracle Database 12c/18c/19c Benchmarks, multitenant databases
-PROMPT -- require assessment and remediation at BOTH levels:
-PROMPT --
-PROMPT -- 1. CDB ROOT LEVEL (System-wide controls):
-PROMPT --    - Connect: sqlplus / as sysdba (to CDB$ROOT)
-PROMPT --    - System parameters with CONTAINER=ALL
-PROMPT --    - Common users and roles (C##)
-PROMPT --    - System-wide auditing policies
-PROMPT --
-PROMPT -- 2. PDB LEVEL (Database-specific controls):
-PROMPT --    - Connect: sqlplus user/pass@pdb_service
-PROMPT --    - Local users and profiles
-PROMPT --    - PDB-specific privileges
-PROMPT --    - Database-level audit settings
-PROMPT --
-PROMPT -- CURRENT ASSESSMENT SCOPE:
+PROMPT
+PROMPT ============================================================================
+PROMPT Remediation Command Summary
+PROMPT ============================================================================
+PROMPT Review and test all statements in a non-production environment.
+PROMPT Apply changes during approved maintenance windows and capture backups.
+PROMPT
+
+SELECT '[Context] Database Version : ' || version FROM V$INSTANCE;
+SELECT '[Context] Host / Instance  : ' || SYS_CONTEXT('USERENV', 'SERVER_HOST') || ' / ' || SYS_CONTEXT('USERENV', 'INSTANCE_NAME') FROM DUAL;
+SELECT '[Context] Multitenant Mode : ' || NVL((SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1), 'NO') FROM DUAL;
+
 SET DEFINE ON
-SELECT CASE 
-  WHEN '&current_container' = 'CDB$ROOT' THEN
-    '-- Running from CDB$ROOT: This covers SYSTEM-LEVEL controls' ||
-    CHR(10) || '-- IMPORTANT: Also run this script from each PDB for complete coverage'
-  WHEN '&is_pdb' = 'YES' THEN
-    '-- Running from PDB (' || '&container_name' || '): This covers DATABASE-LEVEL controls' ||
-    CHR(10) || '-- IMPORTANT: Also run this script from CDB$ROOT for system-level controls'
-  WHEN '&is_multitenant' = 'NO' THEN
-    '-- Running from Non-CDB: All controls apply directly'
-  ELSE
-    '-- Running from Single-tenant database: All controls apply directly'
-END FROM DUAL;
+SELECT '[Context] Execution Scope  : ' ||
+  CASE
+    WHEN '&current_container' = 'CDB$ROOT' THEN 'CDB root (system-wide controls). Re-run in each PDB for full coverage.'
+    WHEN '&is_pdb' = 'YES' THEN 'PDB ' || '&container_name' || ' (local controls). Re-run from CDB$ROOT for system controls.'
+    WHEN '&is_multitenant' = 'NO' THEN 'Non-CDB database (all controls covered in this run).'
+    ELSE 'Single-tenant database (all controls covered in this run).'
+  END
+FROM DUAL;
 SET DEFINE OFF
-PROMPT -- ============================================================================
-PROMPT
-PROMPT -- SECTION 1: DATABASE PARAMETER CORRECTIONS
-PROMPT -- ============================================================================
-
--- Generate parameter fixes
--- AUDIT_SYS_OPERATIONS
-SELECT CASE WHEN UPPER(VALUE) != 'TRUE' THEN
-  '-- Fix AUDIT_SYS_OPERATIONS (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET AUDIT_SYS_OPERATIONS = TRUE SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_SYS_OPERATIONS';
-
--- AUDIT_TRAIL
-SELECT CASE WHEN UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED') THEN
-  '-- Fix AUDIT_TRAIL (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET AUDIT_TRAIL = DB SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'AUDIT_TRAIL';
-
--- GLOBAL_NAMES
-SELECT CASE WHEN UPPER(VALUE) != 'TRUE' THEN
-  '-- Fix GLOBAL_NAMES (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET GLOBAL_NAMES = TRUE SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'GLOBAL_NAMES';
-
--- O7_DICTIONARY_ACCESSIBILITY (if parameter exists)
-SELECT CASE WHEN UPPER(VALUE) NOT IN ('FALSE') AND VALUE IS NOT NULL THEN
-  '-- Fix O7_DICTIONARY_ACCESSIBILITY (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET O7_DICTIONARY_ACCESSIBILITY = FALSE SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY';
-
--- OS_ROLES
-SELECT CASE WHEN UPPER(VALUE) != 'FALSE' THEN
-  '-- Fix OS_ROLES (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET OS_ROLES = FALSE SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'OS_ROLES';
-
--- REMOTE_LOGIN_PASSWORDFILE
-SELECT CASE WHEN UPPER(VALUE) != 'NONE' THEN
-  '-- Fix REMOTE_LOGIN_PASSWORDFILE (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET REMOTE_LOGIN_PASSWORDFILE = ''NONE'' SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_LOGIN_PASSWORDFILE';
-
--- REMOTE_OS_AUTHENT
-SELECT CASE WHEN UPPER(VALUE) != 'FALSE' THEN
-  '-- Fix REMOTE_OS_AUTHENT (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET REMOTE_OS_AUTHENT = FALSE SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_OS_AUTHENT';
-
--- REMOTE_OS_ROLES
-SELECT CASE WHEN UPPER(VALUE) != 'FALSE' THEN
-  '-- Fix REMOTE_OS_ROLES (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET REMOTE_OS_ROLES = FALSE SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_OS_ROLES';
-
--- UTL_FILE_DIR
-SELECT CASE WHEN VALUE IS NOT NULL AND LENGTH(TRIM(VALUE)) > 0 THEN
-  '-- Fix UTL_FILE_DIR (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET UTL_FILE_DIR = '''' SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'UTL_FILE_DIR';
-
--- REMOTE_LISTENER
-SELECT CASE WHEN VALUE IS NOT NULL AND LENGTH(TRIM(VALUE)) > 0 THEN
-  '-- Fix REMOTE_LISTENER (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET REMOTE_LISTENER = '''' SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'REMOTE_LISTENER';
-
--- SEC_CASE_SENSITIVE_LOGON
-SELECT CASE WHEN UPPER(VALUE) != 'TRUE' THEN
-  '-- Fix SEC_CASE_SENSITIVE_LOGON (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET SEC_CASE_SENSITIVE_LOGON = TRUE SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'SEC_CASE_SENSITIVE_LOGON';
-
--- SEC_MAX_FAILED_LOGIN_ATTEMPTS
-SELECT CASE WHEN UPPER(VALUE) != '10' AND NOT (REGEXP_LIKE(VALUE, '^[0-9]+$') AND TO_NUMBER(VALUE) = 10) THEN
-  '-- Fix SEC_MAX_FAILED_LOGIN_ATTEMPTS (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET SEC_MAX_FAILED_LOGIN_ATTEMPTS = 10 SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'SEC_MAX_FAILED_LOGIN_ATTEMPTS';
-
--- SEC_PROTOCOL_ERROR_FURTHER_ACTION
-SELECT CASE WHEN NOT (UPPER(VALUE) LIKE '%DROP%3%' OR UPPER(VALUE) LIKE '%DELAY%3%') THEN
-  '-- Fix SEC_PROTOCOL_ERROR_FURTHER_ACTION (Currently: ' || NVL(VALUE, 'Not Set') || ')' || CHR(10) ||
-  'ALTER SYSTEM SET SEC_PROTOCOL_ERROR_FURTHER_ACTION = ''DELAY,3'' SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'SEC_PROTOCOL_ERROR_FURTHER_ACTION';
-
--- SEC_PROTOCOL_ERROR_TRACE_ACTION
-SELECT CASE WHEN UPPER(VALUE) != 'LOG' THEN
-  '-- Fix SEC_PROTOCOL_ERROR_TRACE_ACTION (Currently: ' || NVL(VALUE, 'Not Set') || ')' || CHR(10) ||
-  'ALTER SYSTEM SET SEC_PROTOCOL_ERROR_TRACE_ACTION = LOG SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'SEC_PROTOCOL_ERROR_TRACE_ACTION';
-
--- SEC_RETURN_SERVER_RELEASE_BANNER
-SELECT CASE WHEN UPPER(VALUE) != 'FALSE' THEN
-  '-- Fix SEC_RETURN_SERVER_RELEASE_BANNER (Currently: ' || NVL(VALUE, 'Not Set') || ')' || CHR(10) ||
-  'ALTER SYSTEM SET SEC_RETURN_SERVER_RELEASE_BANNER = FALSE SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'SEC_RETURN_SERVER_RELEASE_BANNER';
-
--- SQL92_SECURITY
-SELECT CASE WHEN UPPER(VALUE) != 'TRUE' THEN
-  '-- Fix SQL92_SECURITY (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET SQL92_SECURITY = TRUE SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'SQL92_SECURITY';
-
--- _TRACE_FILES_PUBLIC
-SELECT CASE WHEN VALUE != 'FALSE' AND VALUE IS NOT NULL THEN
-  '-- Fix _TRACE_FILES_PUBLIC (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET "_trace_files_public" = FALSE SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE NAME = '_trace_files_public';
-
--- RESOURCE_LIMIT
-SELECT CASE WHEN UPPER(VALUE) != 'TRUE' THEN
-  '-- Fix RESOURCE_LIMIT (Currently: ' || VALUE || ')' || CHR(10) ||
-  'ALTER SYSTEM SET RESOURCE_LIMIT = TRUE SCOPE = SPFILE;' || CHR(10)
-ELSE '' END
-FROM V$PARAMETER WHERE UPPER(NAME) = 'RESOURCE_LIMIT';
-
--- Version-specific parameters (12c+)
-SELECT CASE WHEN vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
-  CASE WHEN UPPER(p.VALUE) NOT IN ('C##', 'c##') THEN
-    '-- Fix COMMON_USER_PREFIX for 12c+ (Currently: ' || p.VALUE || ')' || CHR(10) ||
-    'ALTER SYSTEM SET COMMON_USER_PREFIX = ''C##'' SCOPE = SPFILE;' || CHR(10)
-  ELSE '' END
-ELSE '' END
-FROM V$PARAMETER p CROSS JOIN V$INSTANCE vi WHERE UPPER(p.NAME) = 'COMMON_USER_PREFIX';
 
 PROMPT
-PROMPT -- ============================================================================
-PROMPT -- SECTION 2: USER AND PROFILE SECURITY  
-PROMPT -- ============================================================================
+PROMPT [1] Installation & Patching
+PROMPT   Focus on supported versions, CPU/PSU patching, and removal of sample schemas.
 
--- Remove sample users
-SELECT CASE WHEN COUNT(*) > 0 THEN
-  '-- Remove Oracle sample users' || CHR(10) ||
-  LISTAGG('DROP USER ' || USERNAME || ' CASCADE;', CHR(10)) WITHIN GROUP (ORDER BY USERNAME) || CHR(10)
-ELSE '' END
-FROM ALL_USERS WHERE USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH');
-
--- Fix common user naming convention in CDB (12c+)
-SELECT CASE 
-  WHEN (vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version LIKE '19.%')
-    AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
-    AND COUNT(*) > 0 
-  THEN
-    '-- Fix common user naming convention (CIS 1.5)' || CHR(10) ||
-    '-- Common users found without C## prefix: ' || LISTAGG(du.USERNAME, ', ') WITHIN GROUP (ORDER BY du.USERNAME) || CHR(10) ||
-    '-- Review and either rename or drop these users:' || CHR(10) ||
-    LISTAGG('-- DROP USER ' || du.USERNAME || ' CASCADE; -- or rename if needed', CHR(10)) WITHIN GROUP (ORDER BY du.USERNAME) || CHR(10) ||
-    '-- Note: Common users must start with C## in CDB environments' || CHR(10)
-ELSE '' END
-FROM DBA_USERS du CROSS JOIN V$INSTANCE vi
-WHERE du.COMMON = 'YES' 
-AND du.USERNAME NOT LIKE 'C##%'
-AND du.USERNAME NOT IN ('SYS','SYSTEM')
-GROUP BY vi.version;
-
--- Fix profile settings (only if needed)
-SELECT CASE WHEN (
-  -- Check if any profile settings need fixing
-  EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='FAILED_LOGIN_ATTEMPTS' 
-    AND PROFILE='DEFAULT' AND (LIMIT = 'UNLIMITED' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) != 5))) OR
-  EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_LOCK_TIME' 
-    AND PROFILE='DEFAULT' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT' OR (REGEXP_LIKE(LIMIT, '^[0-9.]+$') AND TO_NUMBER(LIMIT) != 1))) OR
-  EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_LIFE_TIME' 
-    AND PROFILE='DEFAULT' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) != 90))) OR
-  EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_REUSE_MAX' 
-    AND PROFILE='DEFAULT' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) != 20))) OR
-  EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_REUSE_TIME' 
-    AND PROFILE='DEFAULT' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) != 365))) OR
-  EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='PASSWORD_GRACE_TIME' 
-    AND PROFILE='DEFAULT' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) != 5))) OR
-  EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='SESSIONS_PER_USER' 
-    AND PROFILE='DEFAULT' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) != 5))) OR
-  EXISTS (SELECT 1 FROM DBA_PROFILES WHERE RESOURCE_NAME='IDLE_TIME' 
-    AND PROFILE='DEFAULT' AND (LIMIT = 'UNLIMITED' OR LIMIT = 'DEFAULT' OR (REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) != 30)))
-) THEN
-  '-- Configure secure password profile settings' || CHR(10) ||
-  'ALTER PROFILE DEFAULT LIMIT FAILED_LOGIN_ATTEMPTS 5;' || CHR(10) ||
-  'ALTER PROFILE DEFAULT LIMIT PASSWORD_LOCK_TIME 1;' || CHR(10) ||
-  'ALTER PROFILE DEFAULT LIMIT PASSWORD_LIFE_TIME 90;' || CHR(10) ||
-  'ALTER PROFILE DEFAULT LIMIT PASSWORD_REUSE_MAX 20;' || CHR(10) ||
-  'ALTER PROFILE DEFAULT LIMIT PASSWORD_REUSE_TIME 365;' || CHR(10) ||
-  'ALTER PROFILE DEFAULT LIMIT PASSWORD_GRACE_TIME 5;' || CHR(10) ||
-  'ALTER PROFILE DEFAULT LIMIT SESSIONS_PER_USER 5;' || CHR(10) ||
-  'ALTER PROFILE DEFAULT LIMIT IDLE_TIME 30;' || CHR(10)
-ELSE '' END
-FROM DUAL;
-
--- Set password verification function (only if needed)
-SELECT CASE WHEN EXISTS (
-  SELECT 1 FROM DBA_PROFILES 
-  WHERE RESOURCE_NAME='PASSWORD_VERIFY_FUNCTION' 
-  AND PROFILE='DEFAULT' 
-  AND (LIMIT = 'NULL' OR LIMIT = 'DEFAULT')
-) THEN
-  '-- Set password verification function' || CHR(10) ||
-  'ALTER PROFILE DEFAULT LIMIT PASSWORD_VERIFY_FUNCTION ' ||
-  CASE 
-    WHEN version LIKE '12.%' OR version LIKE '18.%' OR version LIKE '19.%' 
-    THEN 'ORA12C_VERIFY_FUNCTION;'
-    ELSE 'VERIFY_FUNCTION_11G;'
-  END || CHR(10)
-ELSE '' END
-FROM V$INSTANCE;
-
--- Address default password users (if any exist)
-SELECT CASE WHEN COUNT(*) > 0 THEN
-  '-- Force password change for users with default passwords' || CHR(10) ||
-  LISTAGG('ALTER USER ' || USERNAME || ' PASSWORD EXPIRE ACCOUNT LOCK;', CHR(10)) WITHIN GROUP (ORDER BY USERNAME) || CHR(10) ||
-  '-- Note: Unlock and set secure passwords: ALTER USER <username> IDENTIFIED BY <secure_password> ACCOUNT UNLOCK;' || CHR(10)
-ELSE '' END
-FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%';
-
-PROMPT
-PROMPT -- ============================================================================
-PROMPT -- SECTION 3: PRIVILEGE REVOCATION
-PROMPT -- ============================================================================
-
--- Revoke dangerous PUBLIC privileges
-SELECT CASE WHEN COUNT(*) > 0 THEN
-  '-- Revoke dangerous EXECUTE privileges from PUBLIC' || CHR(10) ||
-  LISTAGG('REVOKE EXECUTE ON ' || TABLE_NAME || ' FROM PUBLIC;', CHR(10)) WITHIN GROUP (ORDER BY TABLE_NAME) || CHR(10)
-ELSE '' END
-FROM DBA_TAB_PRIVS 
-WHERE GRANTEE='PUBLIC' 
-AND PRIVILEGE='EXECUTE' 
-AND TABLE_NAME IN (
-  'DBMS_ADVISOR','DBMS_CRYPTO','DBMS_JAVA','DBMS_JAVA_TEST','DBMS_JOB','DBMS_LDAP',
-  'DBMS_LOB','DBMS_OBFUSCATION_TOOLKIT','DBMS_RANDOM','DBMS_SCHEDULER','DBMS_SQL',
-  'DBMS_XMLGEN','DBMS_XMLQUERY','UTL_FILE','UTL_INADDR','UTL_TCP','UTL_MAIL',
-  'UTL_SMTP','UTL_DBWS','UTL_ORAMTS','UTL_HTTP','HTTPURITYPE','DBMS_SYS_SQL',
-  'DBMS_BACKUP_RESTORE','DBMS_AQADM_SYSCALLS','DBMS_REPCAT_SQL_UTL','INITJVMAUX',
-  'DBMS_STREAMS_ADM_UTL','DBMS_AQADM_SYS','DBMS_STREAMS_RPC','DBMS_PRVTAQIM',
-  'LTADM','WWV_DBMS_SQL','WWV_EXECUTE_IMMEDIATE','DBMS_IJOB','DBMS_FILE_TRANSFER'
-);
-
--- Revoke excessive DBA roles from non-system users
-SELECT CASE WHEN COUNT(*) > 0 THEN
-  '-- Revoke DBA role from non-system users' || CHR(10) ||
-  LISTAGG('REVOKE DBA FROM ' || GRANTEE || ';', CHR(10)) WITHIN GROUP (ORDER BY GRANTEE) || CHR(10) ||
-  '-- Note: Grant specific privileges based on actual requirements' || CHR(10)
-ELSE '' END
-FROM DBA_ROLE_PRIVS 
-WHERE GRANTED_ROLE='DBA' 
-AND GRANTEE NOT IN ('SYS','SYSTEM','SYSMAN');
-
--- Revoke excessive ANY privileges (excluding Oracle system accounts) - Limited output to prevent string overflow
-SELECT CASE WHEN COUNT(*) > 0 THEN
-  '-- Review and revoke excessive ANY privileges from non-system users' || CHR(10) ||
-  '-- Found ' || COUNT(*) || ' non-system users with ANY privileges' || CHR(10) ||
-  '-- Generate complete list with: SELECT ''REVOKE '' || privilege || '' FROM '' || grantee || '';'' FROM dba_sys_privs WHERE privilege LIKE ''%ANY%'' AND grantee NOT IN (Oracle system accounts);' || CHR(10)
-ELSE '' END
-FROM DBA_SYS_PRIVS 
-WHERE PRIVILEGE LIKE '%ANY%' 
-AND GRANTEE NOT IN (
-  'DBA','SYS','SYSTEM','IMP_FULL_DATABASE','EXP_FULL_DATABASE','DATAPUMP_IMP_FULL_DATABASE',
-  'AUDSYS','GGSYS','GSMADMIN_INTERNAL','SYSBACKUP','SYSDG','SYSKM','SYSRAC','XDB','CTXSYS',
-  'MDSYS','OLAPSYS','ORDSYS','WMSYS','APEX_PUBLIC_USER','FLOWS_FILES','ANONYMOUS',
-  'SPATIAL_CSW_ADMIN_USR','SPATIAL_WFS_ADMIN_USR','MDDATA','ORACLE_OCM','ORDDATA',
-  'ORDPLUGINS','SI_INFORMTN_SCHEMA','SYSMAN','MGMT_VIEW','DBSNMP'
-);
-
--- Revoke EXEMPT ACCESS POLICY if granted (with multitenant scope handling)
-SELECT CASE WHEN COUNT(*) > 0 THEN
-  '-- Revoke EXEMPT ACCESS POLICY (critical security bypass)' || CHR(10) ||
-  '-- Note: For multitenant databases, connect to CDB root as SYSDBA if scope errors occur' || CHR(10) ||
-  LISTAGG(
-    CASE 
-      WHEN vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
-        CASE WHEN (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' THEN
-          '-- Connect to CDB root: REVOKE EXEMPT ACCESS POLICY FROM ' || GRANTEE || ' CONTAINER=ALL;'
-        ELSE
-          'REVOKE EXEMPT ACCESS POLICY FROM ' || GRANTEE || ';'
-        END
-      ELSE
-        'REVOKE EXEMPT ACCESS POLICY FROM ' || GRANTEE || ';'
-    END, CHR(10)
-  ) WITHIN GROUP (ORDER BY GRANTEE) || CHR(10)
-ELSE '' END
-FROM DBA_SYS_PRIVS, V$INSTANCE vi WHERE PRIVILEGE='EXEMPT ACCESS POLICY';
-
-PROMPT
-PROMPT -- ============================================================================
-PROMPT -- SECTION 4: AUDIT CONFIGURATION
-PROMPT -- ============================================================================
--- Enable auditing (only if needed)
-SELECT CASE WHEN (
-  -- Check if any required audit options are missing
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='CREATE SESSION' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='USER' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='ALTER USER' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='DROP USER' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='ROLE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='SYSTEM GRANT' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='PROFILE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='ALTER PROFILE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='DROP PROFILE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='DATABASE LINK' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='PUBLIC DATABASE LINK' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='PUBLIC SYNONYM' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='SYNONYM' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='GRANT DIRECTORY' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='SELECT ANY DICTIONARY' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_PRIV_AUDIT_OPTS WHERE PRIVILEGE='GRANT ANY OBJECT PRIVILEGE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_PRIV_AUDIT_OPTS WHERE PRIVILEGE='GRANT ANY PRIVILEGE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='DROP ANY PROCEDURE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='PROCEDURE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='ALTER SYSTEM' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='TRIGGER' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') OR
-  NOT EXISTS (SELECT 1 FROM DBA_OBJ_AUDIT_OPTS WHERE OBJECT_NAME='AUD$' AND ALT='A/A' AND AUD='A/A' AND COM='A/A' AND DEL='A/A' AND GRA='A/A' AND IND='A/A' AND INS='A/A' AND LOC='A/A' AND REN='A/A' AND SEL='A/A' AND UPD='A/A' AND FBK='A/A')
-) THEN
-  '-- Enable comprehensive auditing (only missing options)' || CHR(10) ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='CREATE SESSION' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT SESSION;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='USER' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT USER;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='ALTER USER' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT ALTER USER;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='DROP USER' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT DROP USER;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='ROLE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT ROLE;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='SYSTEM GRANT' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT SYSTEM GRANT;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='PROFILE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT PROFILE;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='ALTER PROFILE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT ALTER PROFILE;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='DROP PROFILE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT DROP PROFILE;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='DATABASE LINK' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT DATABASE LINK;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='PUBLIC DATABASE LINK' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT PUBLIC DATABASE LINK;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='PUBLIC SYNONYM' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT PUBLIC SYNONYM;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='SYNONYM' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT SYNONYM;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='GRANT DIRECTORY' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT GRANT DIRECTORY;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='SELECT ANY DICTIONARY' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT SELECT ANY DICTIONARY;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_PRIV_AUDIT_OPTS WHERE PRIVILEGE='GRANT ANY OBJECT PRIVILEGE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT GRANT ANY OBJECT PRIVILEGE;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_PRIV_AUDIT_OPTS WHERE PRIVILEGE='GRANT ANY PRIVILEGE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT GRANT ANY PRIVILEGE;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='DROP ANY PROCEDURE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT DROP ANY PROCEDURE;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='PROCEDURE' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT PROCEDURE;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='ALTER SYSTEM' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT ALTER SYSTEM;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_STMT_AUDIT_OPTS WHERE AUDIT_OPTION='TRIGGER' AND SUCCESS='BY ACCESS' AND FAILURE='BY ACCESS') 
-    THEN 'AUDIT TRIGGER;' || CHR(10) ELSE '' END ||
-  CASE WHEN NOT EXISTS (SELECT 1 FROM DBA_OBJ_AUDIT_OPTS WHERE OBJECT_NAME='AUD$' AND ALT='A/A' AND AUD='A/A' AND COM='A/A' AND DEL='A/A' AND GRA='A/A' AND IND='A/A' AND INS='A/A' AND LOC='A/A' AND REN='A/A' AND SEL='A/A' AND UPD='A/A' AND FBK='A/A') 
-    THEN CHR(10) || '-- Audit critical system objects' || CHR(10) ||
-      CASE 
-        WHEN (SELECT version FROM v$instance) LIKE '12.%' OR (SELECT version FROM v$instance) LIKE '18.%' OR (SELECT version FROM v$instance) LIKE '19.%' THEN
-          CASE WHEN (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES' THEN
-            '-- Note: Connect to CDB root as SYSDBA for system object auditing:' || CHR(10) ||
-            '-- AUDIT ALL ON SYS.AUD$ BY ACCESS;' || CHR(10)
-          ELSE
-            'AUDIT ALL ON SYS.AUD$ BY ACCESS;' || CHR(10)
-          END
-        ELSE
-          'AUDIT ALL ON SYS.AUD$ BY ACCESS;' || CHR(10)
-      END
-    ELSE '' END
-ELSE '' END
-FROM DUAL;
-
--- Version-specific audit configuration (12c+ Unified Auditing)
-SELECT CASE WHEN vi.version LIKE '12.%' OR vi.version LIKE '18.%' OR vi.version LIKE '19.%' THEN
-  '-- 12c+ Unified Auditing recommendations' || CHR(10) ||
-  '-- Note: Consider enabling Unified Auditing for better performance' || CHR(10) ||
-  '-- Consult Oracle documentation for unified auditing migration' || CHR(10)
-ELSE '' END
-FROM V$INSTANCE vi;
-
-PROMPT
-PROMPT -- ============================================================================
-PROMPT -- SECTION 5: POST-REMEDIATION STEPS
-PROMPT -- ============================================================================
-PROMPT
-PROMPT -- After applying parameter changes:
-PROMPT -- 1. SHUTDOWN IMMEDIATE;
-PROMPT -- 2. STARTUP;
-PROMPT -- 3. Verify changes: SELECT name, value FROM v$parameter WHERE name IN ('audit_trail', 'audit_sys_operations');
-PROMPT -- 4. Test application functionality
-PROMPT -- 5. Update security documentation
-PROMPT -- 6. Schedule follow-up CIS audit to verify compliance
-PROMPT
-PROMPT -- ============================================================================
-PROMPT -- COMPLETE CIS MULTITENANT ASSESSMENT CHECKLIST
-PROMPT -- ============================================================================
-
-SET DEFINE ON
-SELECT CASE 
-  WHEN '&is_multitenant' = 'YES' THEN
-    '-- COMPLETE CIS ASSESSMENT FOR MULTITENANT DATABASE:' || CHR(10) ||
-    '-- ' || CHR(10) ||
-    '-- Step 1: CDB Root Assessment (System-level controls)' || CHR(10) ||
-    '--   Connect: sqlplus / as sysdba' || CHR(10) ||
-    '--   Ensure connected to CDB$ROOT: SELECT SYS_CONTEXT(''USERENV'', ''CON_NAME'') FROM DUAL;' || CHR(10) ||
-    '--   Run: @cis_benchmark_11g_through_19c.sql' || CHR(10) ||
-    '-- ' || CHR(10) ||
-    '-- Step 2: Each PDB Assessment (Database-level controls)' || CHR(10) ||
-    '--   List PDBs: SELECT name, open_mode FROM v$pdbs;' || CHR(10) ||
-    '--   For each PDB:' || CHR(10) ||
-    '--     Connect: sqlplus user/pass@pdb_service_name' || CHR(10) ||
-    '--     Run: @cis_benchmark_11g_through_19c.sql' || CHR(10) ||
-    '-- ' || CHR(10) ||
-    '-- Step 3: Combine Results' || CHR(10) ||
-    '--   CDB Root results = System-wide compliance' || CHR(10) ||
-    '--   Each PDB results = Database-specific compliance' || CHR(10) ||
-    '--   Overall compliance = CDB Root + All PDBs' || CHR(10) ||
-    '-- ' || CHR(10) ||
-    CASE WHEN '&current_container' = 'CDB$ROOT' THEN
-      '-- CURRENT STATUS: CDB Root assessment complete' || CHR(10) ||
-      '-- NEXT STEPS: Run assessment in each PDB for complete coverage' || CHR(10) ||
-      '-- List your PDBs: SELECT name, open_mode FROM v$pdbs WHERE name != ''PDB$SEED'';'
+WITH default_pw AS (
+  SELECT USERNAME
+  FROM DBA_USERS_WITH_DEFPWD
+  WHERE USERNAME NOT LIKE '%XS$NULL%'
+), summary_default AS (
+  SELECT COUNT(*) AS total FROM default_pw
+), sample_default AS (
+  SELECT * FROM default_pw WHERE ROWNUM <= 50
+)
+SELECT (
+  '[1.2] Default Password Accounts' || CHR(10) ||
+  CASE
+    WHEN (SELECT total FROM summary_default) > 0 THEN
+      '  Issue  : ' || (SELECT total FROM summary_default) || ' account(s) use default credentials' || CHR(10) ||
+      '  Action :' || CHR(10) ||
+      NVL((SELECT LISTAGG('    ALTER USER ' || USERNAME || ' IDENTIFIED BY <new_strong_password> ACCOUNT UNLOCK;', CHR(10))
+             WITHIN GROUP (ORDER BY USERNAME) FROM sample_default),
+          '    -- Review DBA_USERS_WITH_DEFPWD for the affected accounts.') || CHR(10) ||
+      CASE WHEN (SELECT total FROM summary_default) > 50 THEN '    -- Additional accounts exist; query DBA_USERS_WITH_DEFPWD for full list.' || CHR(10) ELSE '' END ||
+      '    -- Replace <new_strong_password> and expire/reset passwords per policy.'
     ELSE
-      '-- CURRENT STATUS: PDB (' || '&container_name' || ') assessment complete' || CHR(10) ||
-      '-- NEXT STEPS: Run assessment from CDB$ROOT for system-level controls' || CHR(10) ||
-      '-- Connect to CDB Root: sqlplus / as sysdba'
-    END
-  ELSE
-    '-- Single-tenant database: Assessment complete for all controls' || CHR(10) ||
-    '-- No additional container-level assessments required'
-END FROM DUAL;
+      '  Status : OK'
+  END
+) || CHR(10)
+FROM summary_default;
+
+WITH sample_accounts AS (
+  SELECT USERNAME, ACCOUNT_STATUS
+  FROM DBA_USERS
+  WHERE USERNAME IN ('BI','HR','IX','OE','PM','SCOTT','SH','DEMO','SAMPLE','TEST','GUEST','OUTLN')
+), summary_sample AS (
+  SELECT COUNT(*) AS total FROM sample_accounts
+), sample_list AS (
+  SELECT * FROM sample_accounts WHERE ROWNUM <= 50
+)
+SELECT (
+  '[1.3] Sample / Unused Accounts' || CHR(10) ||
+  CASE
+    WHEN (SELECT total FROM summary_sample) > 0 THEN
+      '  Issue  : ' || (SELECT total FROM summary_sample) || ' sample or legacy account(s) present' || CHR(10) ||
+      '  Action :' || CHR(10) ||
+      NVL((SELECT LISTAGG(
+               CASE WHEN ACCOUNT_STATUS LIKE 'OPEN%'
+                    THEN '    ALTER USER ' || USERNAME || ' ACCOUNT LOCK;'
+                    ELSE '    DROP USER ' || USERNAME || ' CASCADE; -- verify the account is unused before dropping'
+               END,
+               CHR(10)) WITHIN GROUP (ORDER BY USERNAME)
+             FROM sample_list),
+          '    -- Review DBA_USERS for sample accounts before removing them.') || CHR(10) ||
+      CASE WHEN (SELECT total FROM summary_sample) > 50 THEN '    -- Additional accounts exist; query DBA_USERS for full list.' || CHR(10) ELSE '' END ||
+      '    -- Confirm with application owners prior to removal.'
+    ELSE
+      '  Status : OK'
+  END
+) || CHR(10)
+FROM summary_sample;
+
+SET DEFINE ON
+WITH common_summary AS (
+  SELECT COUNT(*) AS total
+  FROM DBA_USERS
+  WHERE COMMON = 'YES'
+    AND USERNAME NOT LIKE 'C##%'
+    AND USERNAME NOT IN ('SYS','SYSTEM')
+), common_list AS (
+  SELECT USERNAME
+  FROM DBA_USERS
+  WHERE COMMON = 'YES'
+    AND USERNAME NOT LIKE 'C##%'
+    AND USERNAME NOT IN ('SYS','SYSTEM')
+  ORDER BY USERNAME
+)
+SELECT (
+  '[1.5] Common User Naming (CDB only)' || CHR(10) ||
+  CASE
+    WHEN ('&is_multitenant' = 'YES')
+         AND (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+         AND (SELECT total FROM common_summary) > 0 THEN
+      '  Issue  : ' || (SELECT total FROM common_summary) || ' common user(s) without C## prefix' || CHR(10) ||
+      '  Action :' || CHR(10) ||
+      NVL((SELECT LISTAGG('    -- Review: ' || USERNAME, CHR(10)) WITHIN GROUP (ORDER BY USERNAME) FROM common_list),
+          '    -- Review DBA_USERS for non-compliant common users.') || CHR(10) ||
+      '    -- Rename (ALTER USER) or drop non-compliant common users after validation.'
+    WHEN ('&is_multitenant' = 'YES') THEN
+      '  Status : OK'
+    ELSE
+      '  Status : Not applicable (non-CDB)'
+  END
+) || CHR(10)
+FROM DUAL;
 SET DEFINE OFF
+
+PROMPT
+PROMPT [2] Oracle Parameter Hardening
+PROMPT   Apply ALTER SYSTEM statements from a privileged session; restart may be required for SPFILE changes.
+
+SELECT (
+  '[2.1] Listener Configuration' || CHR(10) ||
+  '  Action : Review $ORACLE_HOME/network/admin/listener.ora and ensure:' || CHR(10) ||
+  '    * SECURE_CONTROL_<listener_name> = ON' || CHR(10) ||
+  '    * ADMIN_RESTRICTIONS_<listener_name> = ON' || CHR(10) ||
+  '    * SECURE_REGISTER_<listener_name> = TCPS or IPC' || CHR(10) ||
+  '    * extproc entries are removed or tightly restricted' || CHR(10) ||
+  '    * Restart listener with `lsnrctl stop` / `lsnrctl start`'
+) || CHR(10)
+FROM DUAL;
+
+WITH param_issues AS (
+  SELECT LOWER(NAME) AS name,
+         VALUE,
+         CASE LOWER(NAME)
+           WHEN 'audit_sys_operations' THEN 'ALTER SYSTEM SET AUDIT_SYS_OPERATIONS=TRUE SCOPE=SPFILE;'
+           WHEN 'audit_trail' THEN 'ALTER SYSTEM SET AUDIT_TRAIL=DB SCOPE=SPFILE;'
+           WHEN 'global_names' THEN 'ALTER SYSTEM SET GLOBAL_NAMES=TRUE SCOPE=SPFILE;'
+           WHEN 'local_listener' THEN 'ALTER SYSTEM SET LOCAL_LISTENER=''(DESCRIPTION=(ADDRESS=(PROTOCOL=IPC)(KEY=REGISTER)))'' SCOPE=BOTH;'
+           WHEN 'o7_dictionary_accessibility' THEN 'ALTER SYSTEM SET O7_DICTIONARY_ACCESSIBILITY=FALSE SCOPE=SPFILE;'
+           WHEN 'os_roles' THEN 'ALTER SYSTEM SET OS_ROLES=FALSE SCOPE=SPFILE;'
+           WHEN 'remote_listener' THEN 'ALTER SYSTEM SET REMOTE_LISTENER='''' SCOPE=SPFILE;'
+           WHEN 'remote_login_passwordfile' THEN 'ALTER SYSTEM SET REMOTE_LOGIN_PASSWORDFILE=NONE SCOPE=SPFILE;'
+           WHEN 'remote_os_authent' THEN 'ALTER SYSTEM SET REMOTE_OS_AUTHENT=FALSE SCOPE=SPFILE;'
+           WHEN 'remote_os_roles' THEN 'ALTER SYSTEM SET REMOTE_OS_ROLES=FALSE SCOPE=SPFILE;'
+           WHEN 'utl_file_dir' THEN 'ALTER SYSTEM SET UTL_FILE_DIR='''' SCOPE=SPFILE; -- create explicit DIRECTORY objects instead'
+           WHEN 'sec_case_sensitive_logon' THEN 'ALTER SYSTEM SET SEC_CASE_SENSITIVE_LOGON=TRUE SCOPE=SPFILE;'
+           WHEN 'sec_max_failed_login_attempts' THEN 'ALTER SYSTEM SET SEC_MAX_FAILED_LOGIN_ATTEMPTS=3 SCOPE=SPFILE;'
+           WHEN 'sec_protocol_error_further_action' THEN 'ALTER SYSTEM SET SEC_PROTOCOL_ERROR_FURTHER_ACTION=''DELAY,3'' SCOPE=SPFILE;'
+           WHEN 'sec_protocol_error_trace_action' THEN 'ALTER SYSTEM SET SEC_PROTOCOL_ERROR_TRACE_ACTION=LOG SCOPE=SPFILE;'
+           WHEN 'sec_return_server_release_banner' THEN 'ALTER SYSTEM SET SEC_RETURN_SERVER_RELEASE_BANNER=FALSE SCOPE=SPFILE;'
+           WHEN 'sql92_security' THEN 'ALTER SYSTEM SET SQL92_SECURITY=TRUE SCOPE=SPFILE;'
+           WHEN '_trace_files_public' THEN 'ALTER SYSTEM SET "_trace_files_public"=FALSE SCOPE=SPFILE;'
+           WHEN 'resource_limit' THEN 'ALTER SYSTEM SET RESOURCE_LIMIT=TRUE SCOPE=SPFILE;'
+           WHEN 'common_user_prefix' THEN 'ALTER SYSTEM SET COMMON_USER_PREFIX=''C##'' SCOPE=SPFILE;'
+           WHEN 'enable_ddl_logging' THEN 'ALTER SYSTEM SET ENABLE_DDL_LOGGING=TRUE SCOPE=SPFILE;'
+           WHEN 'ldap_directory_sysauth' THEN 'ALTER SYSTEM SET LDAP_DIRECTORY_SYSAUTH=NO SCOPE=SPFILE;'
+           WHEN 'allow_group_access_to_sga' THEN 'ALTER SYSTEM SET ALLOW_GROUP_ACCESS_TO_SGA=FALSE SCOPE=SPFILE;'
+           ELSE 'ALTER SYSTEM SET ' || UPPER(NAME) || '=<secure_value> SCOPE=SPFILE;'
+         END AS command
+  FROM V$PARAMETER
+  WHERE (UPPER(NAME) = 'AUDIT_SYS_OPERATIONS' AND UPPER(VALUE) != 'TRUE')
+     OR (UPPER(NAME) = 'AUDIT_TRAIL' AND UPPER(VALUE) NOT IN ('OS','DB','XML','DB,EXTENDED','XML,EXTENDED'))
+     OR (UPPER(NAME) = 'GLOBAL_NAMES' AND UPPER(VALUE) != 'TRUE')
+     OR (UPPER(NAME) = 'LOCAL_LISTENER' AND (VALUE IS NULL OR UPPER(VALUE) NOT LIKE '%IPC%'))
+     OR (UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY' AND UPPER(VALUE) != 'FALSE')
+     OR (UPPER(NAME) = 'OS_ROLES' AND UPPER(VALUE) != 'FALSE')
+     OR (UPPER(NAME) = 'REMOTE_LISTENER' AND VALUE IS NOT NULL AND LENGTH(TRIM(VALUE)) > 0)
+     OR (UPPER(NAME) = 'REMOTE_LOGIN_PASSWORDFILE' AND UPPER(VALUE) != 'NONE')
+     OR (UPPER(NAME) = 'REMOTE_OS_AUTHENT' AND UPPER(VALUE) != 'FALSE')
+     OR (UPPER(NAME) = 'REMOTE_OS_ROLES' AND UPPER(VALUE) != 'FALSE')
+     OR (UPPER(NAME) = 'UTL_FILE_DIR' AND VALUE IS NOT NULL AND LENGTH(TRIM(VALUE)) > 0)
+     OR (UPPER(NAME) = 'SEC_CASE_SENSITIVE_LOGON' AND UPPER(VALUE) != 'TRUE')
+     OR (UPPER(NAME) = 'SEC_MAX_FAILED_LOGIN_ATTEMPTS' AND NVL(VALUE,'0') NOT IN ('3','3.0'))
+     OR (UPPER(NAME) = 'SEC_PROTOCOL_ERROR_FURTHER_ACTION' AND UPPER(VALUE) NOT LIKE '%DELAY%3%' AND UPPER(VALUE) NOT LIKE '%DROP%3%')
+     OR (UPPER(NAME) = 'SEC_PROTOCOL_ERROR_TRACE_ACTION' AND UPPER(VALUE) != 'LOG')
+     OR (UPPER(NAME) = 'SEC_RETURN_SERVER_RELEASE_BANNER' AND UPPER(VALUE) != 'FALSE')
+     OR (UPPER(NAME) = 'SQL92_SECURITY' AND UPPER(VALUE) != 'TRUE')
+     OR (UPPER(NAME) = '_TRACE_FILES_PUBLIC' AND UPPER(VALUE) != 'FALSE')
+     OR (UPPER(NAME) = 'RESOURCE_LIMIT' AND UPPER(VALUE) != 'TRUE')
+     OR (UPPER(NAME) = 'COMMON_USER_PREFIX' AND UPPER(VALUE) != 'C##')
+     OR (UPPER(NAME) = 'ENABLE_DDL_LOGGING' AND UPPER(VALUE) != 'TRUE')
+     OR (UPPER(NAME) = 'LDAP_DIRECTORY_SYSAUTH' AND UPPER(VALUE) != 'NO')
+     OR (UPPER(NAME) = 'ALLOW_GROUP_ACCESS_TO_SGA' AND UPPER(VALUE) != 'FALSE')
+)
+SELECT (
+  '[2.2] Database Parameters' || CHR(10) ||
+  CASE
+    WHEN COUNT(*) > 0 THEN
+      '  Issue  : ' || COUNT(*) || ' parameter(s) deviate from CIS guidance' || CHR(10) ||
+      '  Action :' || CHR(10) ||
+      LISTAGG('    ' || command || ' -- current: ' || NVL(VALUE, '<null>'), CHR(10))
+        WITHIN GROUP (ORDER BY name)
+    ELSE
+      '  Status : OK'
+  END
+) || CHR(10)
+FROM param_issues;
+
+SELECT (
+  '[2.3] SQLNET.ORA Encryption (18c+)' || CHR(10) ||
+  CASE
+    WHEN (SELECT TO_NUMBER(SUBSTR(version,1,2)) FROM V$INSTANCE) >= 18 THEN
+      '  Action : Edit $ORACLE_HOME/network/admin/sqlnet.ora and add:' || CHR(10) ||
+      '    SQLNET.ENCRYPTION_SERVER = REQUIRED' || CHR(10) ||
+      '    SQLNET.CRYPTO_CHECKSUM_SERVER = REQUIRED' || CHR(10) ||
+      '    SQLNET.ENCRYPTION_TYPES_SERVER = (AES256, AES192, AES128)' || CHR(10) ||
+      '    -- Restart database and listener after changes.'
+    ELSE
+      '  Status : Not applicable to version ' || (SELECT version FROM V$INSTANCE)
+  END
+) || CHR(10)
+FROM DUAL;
+
+PROMPT
+PROMPT [3] Connection & Login Policies
+PROMPT   Harden password profiles and verification functions.
+
+WITH profile_issues AS (
+  SELECT PROFILE,
+         RESOURCE_NAME,
+         LIMIT,
+         CASE RESOURCE_NAME
+           WHEN 'FAILED_LOGIN_ATTEMPTS' THEN 'ALTER PROFILE ' || PROFILE || ' LIMIT FAILED_LOGIN_ATTEMPTS 5;'
+           WHEN 'PASSWORD_LOCK_TIME' THEN 'ALTER PROFILE ' || PROFILE || ' LIMIT PASSWORD_LOCK_TIME 1;'
+           WHEN 'PASSWORD_LIFE_TIME' THEN 'ALTER PROFILE ' || PROFILE || ' LIMIT PASSWORD_LIFE_TIME 90;'
+           WHEN 'PASSWORD_REUSE_MAX' THEN 'ALTER PROFILE ' || PROFILE || ' LIMIT PASSWORD_REUSE_MAX 20;'
+           WHEN 'PASSWORD_REUSE_TIME' THEN 'ALTER PROFILE ' || PROFILE || ' LIMIT PASSWORD_REUSE_TIME 365;'
+           WHEN 'PASSWORD_GRACE_TIME' THEN 'ALTER PROFILE ' || PROFILE || ' LIMIT PASSWORD_GRACE_TIME 5;'
+           WHEN 'SESSIONS_PER_USER' THEN 'ALTER PROFILE ' || PROFILE || ' LIMIT SESSIONS_PER_USER 10;'
+           WHEN 'IDLE_TIME' THEN 'ALTER PROFILE ' || PROFILE || ' LIMIT IDLE_TIME 30;'
+           WHEN 'INACTIVE_ACCOUNT_TIME' THEN 'ALTER PROFILE ' || PROFILE || ' LIMIT INACTIVE_ACCOUNT_TIME 120;'
+         END AS command
+  FROM DBA_PROFILES
+  WHERE RESOURCE_NAME IN ('FAILED_LOGIN_ATTEMPTS','PASSWORD_LOCK_TIME','PASSWORD_LIFE_TIME','PASSWORD_REUSE_MAX',
+                          'PASSWORD_REUSE_TIME','PASSWORD_GRACE_TIME','SESSIONS_PER_USER','IDLE_TIME','INACTIVE_ACCOUNT_TIME')
+    AND (
+      LIMIT = 'UNLIMITED'
+      OR LIMIT = 'DEFAULT'
+      OR (RESOURCE_NAME = 'FAILED_LOGIN_ATTEMPTS' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 5)
+      OR (RESOURCE_NAME = 'PASSWORD_LOCK_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9.]+$') AND TO_NUMBER(LIMIT) < 1)
+      OR (RESOURCE_NAME = 'PASSWORD_LIFE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 90)
+      OR (RESOURCE_NAME = 'PASSWORD_REUSE_MAX' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 20)
+      OR (RESOURCE_NAME = 'PASSWORD_REUSE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) < 365)
+      OR (RESOURCE_NAME = 'PASSWORD_GRACE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 5)
+      OR (RESOURCE_NAME = 'SESSIONS_PER_USER' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 10)
+      OR (RESOURCE_NAME = 'IDLE_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 30)
+      OR (RESOURCE_NAME = 'INACTIVE_ACCOUNT_TIME' AND REGEXP_LIKE(LIMIT, '^[0-9]+$') AND TO_NUMBER(LIMIT) > 120)
+    )
+), summary_profiles AS (
+  SELECT COUNT(*) AS total FROM profile_issues
+), sample_profiles AS (
+  SELECT * FROM profile_issues WHERE ROWNUM <= 100
+)
+SELECT (
+  '[3.1] Password Profile Limits' || CHR(10) ||
+  CASE
+    WHEN (SELECT total FROM summary_profiles) > 0 THEN
+      '  Issue  : ' || (SELECT total FROM summary_profiles) || ' profile setting(s) exceed CIS thresholds' || CHR(10) ||
+      '  Action :' || CHR(10) ||
+      NVL((SELECT LISTAGG('    ' || command || CASE WHEN LIMIT NOT IN ('UNLIMITED','DEFAULT') THEN ' -- current: ' || LIMIT ELSE '' END,
+             CHR(10)) WITHIN GROUP (ORDER BY PROFILE, RESOURCE_NAME) FROM sample_profiles),
+          '    -- Review DBA_PROFILES for detailed profile settings.') || CHR(10) ||
+      CASE WHEN (SELECT total FROM summary_profiles) > 100 THEN '    -- Additional entries exist; query DBA_PROFILES for full list.' || CHR(10) ELSE '' END
+    ELSE
+      '  Status : OK'
+  END
+) || CHR(10)
+FROM summary_profiles;
+
+SELECT (
+  '[3.2] Password Verify Function' || CHR(10) ||
+  CASE
+    WHEN EXISTS (
+      SELECT 1 FROM DBA_PROFILES 
+      WHERE RESOURCE_NAME = 'PASSWORD_VERIFY_FUNCTION'
+        AND (LIMIT IS NULL OR UPPER(LIMIT) IN ('NULL','DEFAULT'))
+    ) THEN
+      '  Action : ALTER PROFILE DEFAULT LIMIT PASSWORD_VERIFY_FUNCTION ' ||
+      CASE 
+        WHEN (SELECT version FROM V$INSTANCE) LIKE '11.%' THEN 'VERIFY_FUNCTION_11G;'
+        ELSE 'ORA12C_VERIFY_FUNCTION;'
+      END
+    ELSE
+      '  Status : OK'
+  END
+) || CHR(10)
+FROM DUAL;
+
+PROMPT
+PROMPT [4] User Access & Authorization
+PROMPT   Remove blanket privileges and tighten role assignments.
+
+WITH public_exec AS (
+  SELECT TABLE_NAME
+  FROM DBA_TAB_PRIVS
+  WHERE GRANTEE = 'PUBLIC'
+    AND PRIVILEGE = 'EXECUTE'
+    AND TABLE_NAME IN (
+      'DBMS_LDAP','UTL_TCP','UTL_SMTP','UTL_HTTP','UTL_INADDR','UTL_URL','HTTPURITYPE','DBMS_NETWORK_ACL_ADMIN',
+      'UTL_FILE','DBMS_LOB','DBMS_ADVISOR','DBMS_FILE_TRANSFER','DBMS_CRYPTO','DBMS_OBFUSCATION_TOOLKIT','DBMS_RANDOM',
+      'DBMS_JAVA','DBMS_JAVA_TEST','DBMS_SCHEDULER','DBMS_JOB','DBMS_SQL','DBMS_XMLGEN','DBMS_XMLQUERY','DBMS_XMLSTORE',
+      'DBMS_XMLSAVE','DBMS_AW','OWA_UTIL','DBMS_REDACT','DBMS_CREDENTIAL','DBMS_BACKUP_RESTORE','DBMS_STREAMS_RPC',
+      'DBMS_AQADM_SYSCALLS','DBMS_REPCAT_SQL_UTL','INITJVMAUX','DBMS_STREAMS_ADM_UTL','DBMS_AQADM_SYS','DBMS_PRVTAQIM',
+      'LTADM','WWV_DBMS_SQL','WWV_EXECUTE_IMMEDIATE','DBMS_IJOB'
+    )
+), summary_public AS (
+  SELECT COUNT(*) AS total FROM public_exec
+), sample_public AS (
+  SELECT * FROM public_exec WHERE ROWNUM <= 50
+)
+SELECT (
+  '[4.1] PUBLIC EXECUTE Privileges' || CHR(10) ||
+  CASE
+    WHEN (SELECT total FROM summary_public) > 0 THEN
+      '  Issue  : ' || (SELECT total FROM summary_public) || ' package(s) exposed to PUBLIC' || CHR(10) ||
+      '  Action :' || CHR(10) ||
+      NVL((SELECT LISTAGG('    REVOKE EXECUTE ON ' || TABLE_NAME || ' FROM PUBLIC;', CHR(10))
+             WITHIN GROUP (ORDER BY TABLE_NAME) FROM sample_public),
+          '    -- Review DBA_TAB_PRIVS for EXECUTE grants to PUBLIC.') || CHR(10) ||
+      CASE WHEN (SELECT total FROM summary_public) > 50 THEN '    -- Additional entries exist; query DBA_TAB_PRIVS for full list.' || CHR(10) ELSE '' END
+    ELSE
+      '  Status : OK'
+  END
+) || CHR(10)
+FROM summary_public;
+
+WITH any_privs AS (
+  SELECT sp.GRANTEE, sp.PRIVILEGE
+  FROM DBA_SYS_PRIVS sp
+  LEFT JOIN DBA_USERS u ON u.USERNAME = sp.GRANTEE
+  LEFT JOIN DBA_ROLES r ON r.ROLE = sp.GRANTEE
+  WHERE sp.PRIVILEGE LIKE '%ANY%'
+    AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+    AND sp.GRANTEE NOT LIKE 'C##%'
+), summary_any AS (
+  SELECT COUNT(*) AS total FROM any_privs
+), sample_any AS (
+  SELECT * FROM any_privs WHERE ROWNUM <= 30
+)
+SELECT (
+  '[4.2] ANY Privileges Granted' || CHR(10) ||
+  CASE
+    WHEN (SELECT total FROM summary_any) > 0 THEN
+      '  Issue  : ' || (SELECT total FROM summary_any) || ' excessive ANY privilege assignments detected' || CHR(10) ||
+      '  Action :' || CHR(10) ||
+      NVL((SELECT LISTAGG('    REVOKE ' || PRIVILEGE || ' FROM ' || GRANTEE || ';', CHR(10))
+             WITHIN GROUP (ORDER BY GRANTEE, PRIVILEGE) FROM sample_any),
+          '    -- Review DBA_SYS_PRIVS for privilege details.') || CHR(10) ||
+      CASE WHEN (SELECT total FROM summary_any) > 30 THEN '    -- Additional entries exist; query DBA_SYS_PRIVS for full list.' || CHR(10) ELSE '' END
+    ELSE
+      '  Status : OK'
+  END
+) || CHR(10)
+FROM summary_any;
+
+WITH system_privs AS (
+  SELECT sp.GRANTEE, sp.PRIVILEGE
+  FROM DBA_SYS_PRIVS sp
+  LEFT JOIN DBA_USERS u ON u.USERNAME = sp.GRANTEE
+  LEFT JOIN DBA_ROLES r ON r.ROLE = sp.GRANTEE
+  WHERE sp.PRIVILEGE IN ('ALTER SYSTEM','DROP ANY TABLE','CREATE ANY PROCEDURE','ALTER ANY PROCEDURE','DROP ANY PROCEDURE',
+                         'CREATE ANY TRIGGER','ALTER ANY TRIGGER','DROP ANY TRIGGER','BECOME USER')
+    AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+    AND sp.GRANTEE NOT LIKE 'C##%'
+), summary_sys AS (
+  SELECT COUNT(*) AS total FROM system_privs
+), sample_sys AS (
+  SELECT * FROM system_privs WHERE ROWNUM <= 30
+)
+SELECT (
+  '[4.3] High-Risk System Privileges' || CHR(10) ||
+  CASE
+    WHEN (SELECT total FROM summary_sys) > 0 THEN
+      '  Issue  : ' || (SELECT total FROM summary_sys) || ' high-impact privilege grants detected' || CHR(10) ||
+      '  Action :' || CHR(10) ||
+      NVL((SELECT LISTAGG('    REVOKE ' || PRIVILEGE || ' FROM ' || GRANTEE || ';', CHR(10))
+             WITHIN GROUP (ORDER BY GRANTEE, PRIVILEGE) FROM sample_sys),
+          '    -- Review DBA_SYS_PRIVS for privilege details.') || CHR(10) ||
+      CASE WHEN (SELECT total FROM summary_sys) > 30 THEN '    -- Additional entries exist; query DBA_SYS_PRIVS for full list.' || CHR(10) ELSE '' END
+    ELSE
+      '  Status : OK'
+  END
+) || CHR(10)
+FROM summary_sys;
+
+WITH role_privs AS (
+  SELECT rp.GRANTEE, rp.GRANTED_ROLE
+  FROM DBA_ROLE_PRIVS rp
+  LEFT JOIN DBA_USERS u ON u.USERNAME = rp.GRANTEE
+  LEFT JOIN DBA_ROLES gr ON gr.ROLE = rp.GRANTEE
+  LEFT JOIN DBA_ROLES granted ON granted.ROLE = rp.GRANTED_ROLE
+  WHERE NVL(u.ORACLE_MAINTAINED, NVL(gr.ORACLE_MAINTAINED, 'N')) = 'N'
+    AND NVL(granted.ORACLE_MAINTAINED, 'N') = 'N'
+    AND rp.GRANTEE NOT LIKE 'C##%'
+    AND rp.GRANTED_ROLE IN ('DBA','SYSDBA','SYSOPER','EXP_FULL_DATABASE','IMP_FULL_DATABASE',
+                            'DELETE_CATALOG_ROLE','EXECUTE_CATALOG_ROLE','SELECT_CATALOG_ROLE')
+), summary_role AS (
+  SELECT COUNT(*) AS total FROM role_privs
+), sample_role AS (
+  SELECT * FROM role_privs WHERE ROWNUM <= 30
+)
+SELECT (
+  '[4.4] Excessive Role Assignments' || CHR(10) ||
+  CASE
+    WHEN (SELECT total FROM summary_role) > 0 THEN
+      '  Issue  : ' || (SELECT total FROM summary_role) || ' elevated role grants detected' || CHR(10) ||
+      '  Action :' || CHR(10) ||
+      NVL((SELECT LISTAGG('    REVOKE ' || GRANTED_ROLE || ' FROM ' || GRANTEE || ';', CHR(10))
+             WITHIN GROUP (ORDER BY GRANTEE, GRANTED_ROLE) FROM sample_role),
+          '    -- Review DBA_ROLE_PRIVS for full grant details.') || CHR(10) ||
+      CASE WHEN (SELECT total FROM summary_role) > 30 THEN '    -- Additional entries exist; query DBA_ROLE_PRIVS for full list.' || CHR(10) ELSE '' END
+    ELSE
+      '  Status : OK'
+  END
+) || CHR(10)
+FROM summary_role;
+
+WITH table_privs AS (
+  SELECT tp.GRANTEE, tp.OWNER, tp.TABLE_NAME, tp.PRIVILEGE
+  FROM DBA_TAB_PRIVS tp
+  LEFT JOIN DBA_USERS u ON u.USERNAME = tp.GRANTEE
+  LEFT JOIN DBA_ROLES r ON r.ROLE = tp.GRANTEE
+  WHERE tp.OWNER = 'SYS'
+    AND tp.TABLE_NAME IN ('USER$','LINK$','USER_HISTORY$','PROXY_DATA$','UNDO$','USER$MIG')
+    AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+    AND tp.GRANTEE NOT LIKE 'C##%'
+), summary_tab AS (
+  SELECT COUNT(*) AS total FROM table_privs
+), sample_tab AS (
+  SELECT * FROM table_privs WHERE ROWNUM <= 30
+)
+SELECT (
+  '[4.5] Sensitive Table Access' || CHR(10) ||
+  CASE
+    WHEN (SELECT total FROM summary_tab) > 0 THEN
+      '  Issue  : ' || (SELECT total FROM summary_tab) || ' grant(s) against core data dictionary tables' || CHR(10) ||
+      '  Action :' || CHR(10) ||
+      NVL((SELECT LISTAGG('    REVOKE ' || PRIVILEGE || ' ON ' || OWNER || '.' || TABLE_NAME || ' FROM ' || GRANTEE || ';', CHR(10))
+             WITHIN GROUP (ORDER BY GRANTEE, TABLE_NAME) FROM sample_tab),
+          '    -- Review DBA_TAB_PRIVS for complete privilege details.') || CHR(10) ||
+      CASE WHEN (SELECT total FROM summary_tab) > 30 THEN '    -- Additional entries exist; query DBA_TAB_PRIVS for full list.' || CHR(10) ELSE '' END
+    ELSE
+      '  Status : OK'
+  END
+) || CHR(10)
+FROM summary_tab;
+
+WITH cdb_info AS (
+  SELECT NVL(CDB, 'NO') AS cdb_mode FROM V$DATABASE WHERE ROWNUM = 1
+), exempt_priv AS (
+  SELECT sp.GRANTEE
+  FROM DBA_SYS_PRIVS sp
+  LEFT JOIN DBA_USERS u ON u.USERNAME = sp.GRANTEE
+  LEFT JOIN DBA_ROLES r ON r.ROLE = sp.GRANTEE
+  WHERE sp.PRIVILEGE = 'EXEMPT ACCESS POLICY'
+    AND NVL(u.ORACLE_MAINTAINED, NVL(r.ORACLE_MAINTAINED, 'N')) = 'N'
+), summary_exempt AS (
+  SELECT COUNT(*) AS total FROM exempt_priv
+), sample_exempt AS (
+  SELECT ep.GRANTEE, ci.cdb_mode
+  FROM exempt_priv ep CROSS JOIN cdb_info ci
+  WHERE ROWNUM <= 50
+)
+SELECT (
+  '[4.6] EXEMPT ACCESS POLICY' || CHR(10) ||
+  CASE
+    WHEN (SELECT total FROM summary_exempt) > 0 THEN
+      '  Issue  : ' || (SELECT total FROM summary_exempt) || ' grantee(s) bypass row-level security' || CHR(10) ||
+      '  Action :' || CHR(10) ||
+      NVL((SELECT LISTAGG('    REVOKE EXEMPT ACCESS POLICY FROM ' || GRANTEE ||
+              CASE WHEN cdb_mode = 'YES' THEN ' CONTAINER=ALL;' ELSE ';' END, CHR(10))
+             WITHIN GROUP (ORDER BY GRANTEE) FROM sample_exempt),
+          '    -- Review DBA_SYS_PRIVS for EXEMPT ACCESS POLICY assignments.') || CHR(10) ||
+      CASE WHEN (SELECT total FROM summary_exempt) > 50 THEN '    -- Additional entries exist; query DBA_SYS_PRIVS for full list.' || CHR(10) ELSE '' END
+    ELSE
+      '  Status : OK'
+  END
+) || CHR(10)
+FROM summary_exempt;
+
+PROMPT
+PROMPT [5] Audit & Logging Policies
+PROMPT   Enable traditional or unified auditing to capture privileged activity.
+
+SELECT (
+  '[5.1] Traditional Auditing (11g)' || CHR(10) ||
+  CASE
+    WHEN (SELECT version FROM V$INSTANCE) LIKE '11.%' THEN
+      '  Action :' || CHR(10) ||
+      '    AUDIT ALTER USER BY ACCESS;' || CHR(10) ||
+      '    AUDIT CREATE USER BY ACCESS;' || CHR(10) ||
+      '    AUDIT DROP USER BY ACCESS;' || CHR(10) ||
+      '    AUDIT ROLE BY ACCESS;' || CHR(10) ||
+      '    AUDIT SYSTEM PRIVILEGE BY ACCESS;' || CHR(10) ||
+      '    AUDIT PROFILE BY ACCESS;' || CHR(10) ||
+      '    AUDIT PUBLIC SYNONYM BY ACCESS;' || CHR(10) ||
+      '    AUDIT SYNONYM BY ACCESS;' || CHR(10) ||
+      '    AUDIT DATABASE LINK BY ACCESS;' || CHR(10) ||
+      '    AUDIT DIRECTORY BY ACCESS;' || CHR(10) ||
+      '    AUDIT ALL ON SYS.AUD$ BY ACCESS;'
+    ELSE
+      '  Status : Not applicable to version ' || (SELECT version FROM V$INSTANCE)
+  END
+) || CHR(10)
+FROM DUAL;
+
+SELECT (
+  '[5.2] Unified Auditing (12c+)' || CHR(10) ||
+  CASE
+    WHEN (SELECT TO_NUMBER(SUBSTR(version,1,2)) FROM V$INSTANCE) >= 12 THEN
+      '  Action :' || CHR(10) ||
+      '    CREATE AUDIT POLICY cis_user_mgmt_policy ACTIONS CREATE USER, ALTER USER, DROP USER;' || CHR(10) ||
+      '    AUDIT POLICY cis_user_mgmt_policy;' || CHR(10) ||
+      '    CREATE AUDIT POLICY cis_role_mgmt_policy ACTIONS CREATE ROLE, ALTER ROLE, DROP ROLE, GRANT, REVOKE;' || CHR(10) ||
+      '    AUDIT POLICY cis_role_mgmt_policy;' || CHR(10) ||
+      '    CREATE AUDIT POLICY cis_profile_policy ACTIONS CREATE PROFILE, ALTER PROFILE, DROP PROFILE;' || CHR(10) ||
+      '    AUDIT POLICY cis_profile_policy;' || CHR(10) ||
+      '    CREATE AUDIT POLICY cis_synonym_policy ACTIONS CREATE SYNONYM, DROP SYNONYM;' || CHR(10) ||
+      '    AUDIT POLICY cis_synonym_policy;' || CHR(10) ||
+      '    CREATE AUDIT POLICY cis_dblink_policy ACTIONS CREATE DATABASE LINK, ALTER DATABASE LINK, DROP DATABASE LINK;' || CHR(10) ||
+      '    AUDIT POLICY cis_dblink_policy;'
+    ELSE
+      '  Status : Not applicable to version ' || (SELECT version FROM V$INSTANCE)
+  END
+) || CHR(10)
+FROM DUAL;
+
+WITH restart_params AS (
+  SELECT LOWER(NAME) AS name
+  FROM V$PARAMETER
+  WHERE (UPPER(NAME) = 'AUDIT_SYS_OPERATIONS' AND UPPER(VALUE) != 'TRUE')
+     OR (UPPER(NAME) = 'REMOTE_OS_AUTHENT' AND UPPER(VALUE) != 'FALSE')
+     OR (UPPER(NAME) = 'REMOTE_LOGIN_PASSWORDFILE' AND UPPER(VALUE) != 'NONE')
+     OR (UPPER(NAME) = 'REMOTE_OS_ROLES' AND UPPER(VALUE) != 'FALSE')
+     OR (UPPER(NAME) = 'SQL92_SECURITY' AND UPPER(VALUE) != 'TRUE')
+     OR (UPPER(NAME) = 'O7_DICTIONARY_ACCESSIBILITY' AND UPPER(VALUE) != 'FALSE')
+     OR (UPPER(NAME) = 'OS_ROLES' AND UPPER(VALUE) != 'FALSE')
+), summary_restart AS (
+  SELECT COUNT(*) AS total FROM restart_params
+), list_restart AS (
+  SELECT LISTAGG('    ' || name, CHR(10)) WITHIN GROUP (ORDER BY name) AS pretty,
+         LISTAGG(''' || name || ''', ', ') WITHIN GROUP (ORDER BY name) AS csv
+  FROM restart_params
+)
+SELECT (
+  '[5.3] Restart Requirements' || CHR(10) ||
+  CASE
+    WHEN (SELECT total FROM summary_restart) > 0 THEN
+      '  Action : Restart database after applying parameter changes to:' || CHR(10) ||
+      (SELECT pretty FROM list_restart) || CHR(10) ||
+      '    -- Sequence: SHUTDOWN IMMEDIATE; STARTUP;' || CHR(10) ||
+      '    -- Verification: SELECT name, value FROM v$parameter WHERE name IN (' || (SELECT csv FROM list_restart) || ');'
+    ELSE
+      '  Status : No restart-required parameter changes detected.'
+  END
+) || CHR(10)
+FROM summary_restart;
+
+PROMPT
+PROMPT [6] Post-Remediation Checklist
+PROMPT   1. SHUTDOWN IMMEDIATE / STARTUP (if SPFILE parameters changed)
+PROMPT   2. Validate parameter values with `SELECT name, value FROM v$parameter ...`
+PROMPT   3. Retest application functionality
+PROMPT   4. Update security documentation and change records
+PROMPT   5. Schedule a follow-up CIS audit to confirm compliance
+
+PROMPT [7] Multitenant Coverage
+SET DEFINE ON
+SELECT (
+  CASE
+    WHEN '&is_multitenant' = 'YES' THEN
+      '  Run the script from CDB$ROOT for system controls and in each open PDB for database-level controls.' || CHR(10) ||
+      CASE WHEN '&current_container' = 'CDB$ROOT' THEN
+        '  Current run covers: CDB root. Remaining scope: each open PDB.'
+      ELSE
+        '  Current run covers: PDB ' || '&container_name' || '. Re-run from CDB$ROOT for system scope.'
+      END
+    ELSE
+      '  Not a multitenant database; single execution covers all controls.'
+  END
+) || CHR(10)
+FROM DUAL;
+SET DEFINE OFF
+
 PROMPT
 PROMPT ============================================================================
 PROMPT                    END OF REMEDIATION COMMANDS

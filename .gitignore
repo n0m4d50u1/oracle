@@ -1,0 +1,73 @@
+# OS-generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+
+# Editor / IDE directories
+.vscode/
+.idea/
+*.iml
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Python virtual environments (precautionary)
+.venv/
+venv/
+ENV/
+
+# Node / npm
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Logs & temp
+*.log
+logs/
+*.tmp
+*.temp
+*.bak
+~$*
+
+# Compiled objects
+*.pyc
+__pycache__/
+*.class
+*.jar
+*.war
+*.ear
+
+# Coverage & test artifacts
+coverage/
+.coverage*
+.nyc_output/
+pytest_cache/
+
+# SQL*Plus spooled outputs
+*.lst
+*.log
+spool/
+
+# Generated audit outputs
+*.html
+*.txt
+cis_reports/
+remediation_output/
+
+# Secrets & credentials (ensure they are never committed)
+*.key
+*.pem
+*.crt
+*.p12
+*.env
+.env.local
+.env.*.local
+
+# Agent guidance files (local only)
+AGENTS.md
+CLAUDE.md
+WARP.md

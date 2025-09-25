@@ -1,393 +1,143 @@
 # Oracle Database CIS Benchmark Audit Tool
 
-A comprehensive Oracle Database security audit tool based on the Center for Internet Security (CIS) benchmarks. This tool automatically detects your Oracle Database version and applies the appropriate CIS benchmark checks for Oracle 11g R2, 12c, 18c, and 19c.
+This repository delivers a self-contained SQL*Plus audit that maps Oracle database hardening posture against the Center for Internet Security (CIS) benchmarks. The script auto-detects the connected database version and tenancy model, runs only applicable controls, and produces a human-friendly HTML report plus a copy/paste remediation plan.
 
-## 🚀 Features
+## Key Capabilities
 
-- **Multi-Version Support**: Automatically detects and adapts to Oracle Database versions 11g R2 through 19c
-- **CIS Compliance**: Based on official CIS Oracle Database Benchmarks
-- **HTML Report Generation**: Creates professional, detailed HTML audit reports
-- **Comprehensive Coverage**: Audits 100+ security controls across 5 major categories
-- **Dynamic Remediation**: Provides specific SQL commands for fixing identified issues
-- **Zero Configuration**: Works out-of-the-box with any Oracle Database connection
-- **Built-in Privilege Verification**: Automatically checks permissions before starting the audit
+- **Version- and Tenancy-Aware Checks** – Supports Oracle 11g R2, 12c, 18c, 19c, and 23ai. Multi-tenant environments are detected automatically, and CDB/PDB scopes are handled independently. Controls for other versions are skipped instead of reporting false failures.
+- **Executive Summary Dashboard** – The HTML report now opens with a dynamic overview that surfaces live counts for default passwords, parameter gaps, privilege issues, and auditing coverage, providing a quick risk snapshot before diving into sections 1–5.
+- **Detailed CIS Mapping** – 100+ controls aligned to CIS benchmark categories (installation, parameters, authentication, privileges, auditing) with explanatory remediation text.
+- **Actionable Remediation Output** – After the HTML report is spooled (`CIS_<host>_<instance>.html`), the script writes a raw remediation plan to the SQL*Plus session (capturable via `SPOOL` if desired). Entries are grouped by theme with ready-to-run SQL.
+- **Pre-flight Privilege Checks** – A PL/SQL verification block stops the audit early if mandatory dictionary views or unified auditing views are not accessible, preventing misleading results.
 
-## 📋 Supported Oracle Versions & CIS Benchmarks
+## Supported Versions & Benchmarks
 
 | Oracle Version | CIS Benchmark Version | Status |
-|---|---|---|
-| Oracle Database 11g R2 | v2.2.0 | ✅ Supported |
-| Oracle Database 12c | v2.0.0/v3.0.0 | ✅ Supported |
-| Oracle Database 18c | v1.0.0/v1.1.0 | ✅ Supported |
-| Oracle Database 19c | v1.0.0/v1.2.0 | ✅ Supported |
-| Oracle Database 23ai | v1.1.0 | ✅ Supported |
+| --- | --- | --- |
+| 11g R2 | v2.2.0 | ✅ Supported |
+| 12c (Non-CDB & CDB/PDB) | v2.0.0 / v3.0.0 | ✅ Supported |
+| 18c | v1.0.0 / v1.1.0 | ✅ Supported |
+| 19c | v1.0.0 / v1.2.0 | ✅ Supported |
+| 23ai | v1.1.0 | ✅ Supported |
 
-## 🔍 Audit Categories
+## Prerequisites
 
-The tool performs comprehensive security checks across these CIS benchmark sections:
+- SQL*Plus client with network connectivity to the target database.
+- A dedicated audit user with dictionary access (see below) or DBA-equivalent privileges.
+- Output directory write access for the generated HTML file.
 
-1. **Database Installation and Patching Requirements**
-   - Version compliance
-   - Patch level verification
-   - Installation security settings
+## Creating the Audit User
 
-2. **Oracle Parameter Settings**
-   - 25+ critical database parameters
-   - Security-related initialization parameters
-   - Network and authentication settings
-
-3. **Connection and Login Restrictions**
-   - Authentication mechanisms
-   - Password policies
-   - Connection limits and timeouts
-
-4. **User Access and Authorization Restrictions**
-   - User account management
-   - Privilege assignments
-   - Role-based access controls
-
-5. **Audit and Logging Policies**
-   - Audit trail configuration
-   - Security event logging
-   - Compliance monitoring
-
-## 🛠️ Prerequisites
-
-- Oracle Database (11g R2, 12c, 18c, 19c, or 23ai)
-- Oracle SQL*Plus client
-- Database administrator privileges to create the audit user and role
-- Database user with appropriate privileges (see setup instructions below)
-
-## 📦 Installation
-
-1. **Clone the repository:**
-   ```bash
-   git clone <repository-url>
-   cd oracle
-   ```
-
-2. **Set up database permissions** (see Database Setup section below)
-
-3. **Verify SQL*Plus connectivity:**
-   ```bash
-   sqlplus username/password@database
-   ```
-
-## 🔐 Database Setup
-
-The CIS audit script requires specific database permissions to access all security-related views and tables. Choose the appropriate setup based on your Oracle Database architecture:
-
-### Non-Multitenant Database (11g, 12c Non-CDB)
-
-Connect as a privileged user (SYS, SYSTEM, or DBA role) and execute:
-
+### Non-Multitenant (11g, 12c Non-CDB)
 ```sql
--- Create the audit role
-CREATE ROLE CISSCANROLE;
+CREATE ROLE cisscanrole;
+GRANT CREATE SESSION TO cisscanrole;
+GRANT SELECT ON V_$PARAMETER TO cisscanrole;
+GRANT SELECT ON DBA_TAB_PRIVS TO cisscanrole;
+GRANT SELECT ON DBA_TABLES TO cisscanrole;
+GRANT SELECT ON DBA_PROFILES TO cisscanrole;
+GRANT SELECT ON DBA_SYS_PRIVS TO cisscanrole;
+GRANT SELECT ON DBA_ROLE_PRIVS TO cisscanrole;
+GRANT SELECT ON DBA_OBJ_AUDIT_OPTS TO cisscanrole;
+GRANT SELECT ON DBA_PRIV_AUDIT_OPTS TO cisscanrole;
+GRANT SELECT ON DBA_PROXIES TO cisscanrole;
+GRANT SELECT ON DBA_USERS TO cisscanrole;
+GRANT SELECT ON DBA_USERS_WITH_DEFPWD TO cisscanrole;
+GRANT SELECT ON DBA_DB_LINKS TO cisscanrole;
+GRANT SELECT ON DBA_ROLES TO cisscanrole;
+GRANT SELECT ON V_$INSTANCE TO cisscanrole;
+GRANT SELECT ON V_$DATABASE TO cisscanrole;
+GRANT SELECT ON V_$SYSTEM_PARAMETER TO cisscanrole;
+GRANT AUDIT_VIEWER TO cisscanrole;
 
--- Grant necessary system privileges
-GRANT CREATE SESSION TO CISSCANROLE;
-
--- Grant specific view privileges
-GRANT SELECT ON V_$PARAMETER TO CISSCANROLE;
-GRANT SELECT ON DBA_TAB_PRIVS TO CISSCANROLE;
-GRANT SELECT ON DBA_TABLES TO CISSCANROLE;
-GRANT SELECT ON DBA_PROFILES TO CISSCANROLE;
-GRANT SELECT ON DBA_SYS_PRIVS TO CISSCANROLE;
-GRANT SELECT ON DBA_STMT_AUDIT_OPTS TO CISSCANROLE;
-GRANT SELECT ON DBA_ROLE_PRIVS TO CISSCANROLE;
-GRANT SELECT ON DBA_OBJ_AUDIT_OPTS TO CISSCANROLE;
-GRANT SELECT ON DBA_PRIV_AUDIT_OPTS TO CISSCANROLE;
-GRANT SELECT ON DBA_PROXIES TO CISSCANROLE;
-GRANT SELECT ON DBA_USERS TO CISSCANROLE;
-GRANT SELECT ON DBA_USERS_WITH_DEFPWD TO CISSCANROLE;
-GRANT SELECT ON DBA_DB_LINKS TO CISSCANROLE;
-GRANT SELECT ON DBA_ROLES TO CISSCANROLE;
-GRANT SELECT ON V_$INSTANCE TO CISSCANROLE;
-GRANT SELECT ON V_$DATABASE TO CISSCANROLE;
-GRANT SELECT ON V_$PDBS TO CISSCANROLE;
-GRANT SELECT ON V_$SYSTEM_PARAMETER TO CISSCANROLE;
-GRANT SELECT ON AUDIT_UNIFIED_ENABLED_POLICIES TO CISSCANROLE;
-GRANT SELECT ON DBA_AUDIT_POLICIES TO CISSCANROLE;
-GRANT AUDIT_VIEWER TO CISSCANROLE; -- For 12c+ audit features
-
--- Create the audit user
-CREATE USER CISSCAN IDENTIFIED BY <strong_password>;
-GRANT CISSCANROLE TO CISSCAN;
-```
-Ignore ERRORS if running the grants against a 11g database.
-
-### Multitenant Database (12c+ CDB/PDB)
-
-Connect to the **CDB root container** as a privileged user (SYS, SYSTEM, or C##DBA role) and execute:
-
-```sql
--- Create the common audit role (available in all containers)
-CREATE ROLE C##CISSCANROLE CONTAINER=ALL;
-
--- Grant necessary system privileges
-GRANT CREATE SESSION TO C##CISSCANROLE CONTAINER=ALL;
-
--- Grant specific view privileges for CDB-wide access
-GRANT SELECT ON V_$PARAMETER TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_TAB_PRIVS TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_TABLES TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_PROFILES TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_SYS_PRIVS TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_STMT_AUDIT_OPTS TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_ROLE_PRIVS TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_OBJ_AUDIT_OPTS TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_PRIV_AUDIT_OPTS TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_PROXIES TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_USERS TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_ROLES TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_USERS_WITH_DEFPWD TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON CDB_DB_LINKS TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON V_$INSTANCE TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON V_$DATABASE TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON V_$PDBS TO C##CISSCANROLE CONTAINER=ALL;
-GRANT SELECT ON V_$SYSTEM_PARAMETER TO C##CISSCANROLE CONTAINER=ALL;
-GRANT AUDIT_VIEWER TO C##CISSCANROLE CONTAINER=ALL;
-
--- Create the common audit user
-CREATE USER C##CISSCAN IDENTIFIED BY <strong_password> CONTAINER=ALL;
-GRANT C##CISSCANROLE TO C##CISSCAN CONTAINER=ALL;
-
--- Enable access to data from all containers
-ALTER USER C##CISSCAN SET CONTAINER_DATA=ALL CONTAINER=CURRENT;
+CREATE USER cisscan IDENTIFIED BY <strong_password>;
+GRANT cisscanrole TO cisscan;
 ```
 
-### Alternative Setup (Using DBA Role)
-
-For simpler setup (with broader privileges), you can use the DBA role:
-
+### Multitenant (12c+ CDB/PDB)
 ```sql
--- Non-multitenant
-CREATE USER CISSCAN IDENTIFIED BY <strong_password>;
-GRANT DBA TO CISSCAN;
+CREATE ROLE C##cisscanrole CONTAINER=ALL;
+GRANT CREATE SESSION TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON V_$PARAMETER TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON CDB_TAB_PRIVS TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON CDB_PROFILES TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON CDB_SYS_PRIVS TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON CDB_ROLE_PRIVS TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON CDB_OBJ_AUDIT_OPTS TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON CDB_PRIV_AUDIT_OPTS TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON CDB_USERS TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON CDB_ROLES TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON CDB_USERS_WITH_DEFPWD TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON CDB_DB_LINKS TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON V_$INSTANCE TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON V_$DATABASE TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON V_$PDBS TO C##cisscanrole CONTAINER=ALL;
+GRANT SELECT ON V_$SYSTEM_PARAMETER TO C##cisscanrole CONTAINER=ALL;
+GRANT AUDIT_VIEWER TO C##cisscanrole CONTAINER=ALL;
 
--- Multitenant
-CREATE USER C##CISSCAN IDENTIFIED BY <strong_password> CONTAINER=ALL;
-GRANT C##DBA TO C##CISSCAN CONTAINER=ALL;
-ALTER USER C##CISSCAN SET CONTAINER_DATA=ALL CONTAINER=CURRENT;
+CREATE USER C##cisscan IDENTIFIED BY <strong_password> CONTAINER=ALL;
+GRANT C##cisscanrole TO C##cisscan CONTAINER=ALL;
+ALTER USER C##cisscan SET CONTAINER_DATA=ALL CONTAINER=CURRENT;
 ```
 
-### Verification
-
-After setup, verify the permissions:
-
+### Fast Track (Full DBA Role)
 ```sql
--- Connect as the audit user
-sqlplus cisscan/password@database
--- Or for multitenant: sqlplus c##cisscan/password@database
+-- Non-CDB
+CREATE USER cisscan IDENTIFIED BY <strong_password>;
+GRANT DBA TO cisscan;
 
--- Test critical view access
-SELECT COUNT(*) FROM DBA_USERS_WITH_DEFPWD;
-SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE ROWNUM <= 5;
-SELECT COUNT(*) FROM V$PARAMETER WHERE ROWNUM <= 5;
+-- CDB/PDB
+CREATE USER C##cisscan IDENTIFIED BY <strong_password> CONTAINER=ALL;
+GRANT C##DBA TO C##cisscan CONTAINER=ALL;
+ALTER USER C##cisscan SET CONTAINER_DATA=ALL CONTAINER=CURRENT;
 ```
 
-## 🚀 Usage
-
-### Basic Usage
+## Running the Audit
 
 ```bash
-# Non-multitenant database
-sqlplus cisscan/password@database @cis_benchmark_11g_through_19c.sql
+# Non-CDB example
+sqlplus cisscan/<password>@//host/service @cis_benchmark_11g_through_19c.sql
 
-# Multitenant database (from CDB root or specific PDB)
-sqlplus c##cisscan/password@database @cis_benchmark_11g_through_19c.sql
+# CDB root (system-wide checks)
+sqlplus C##cisscan/<password>@//host/cdb_service @cis_benchmark_11g_through_19c.sql
+
+# Individual PDB (database-specific checks)
+sqlplus C##cisscan/<password>@//host/pdb_service @cis_benchmark_11g_through_19c.sql
 ```
 
-### Privilege Verification
+### Output Artifacts
 
-The script automatically verifies all required privileges before starting the audit:
+- `CIS_<host>_<instance>.html` – Primary HTML report with:
+  - Executive Summary (dynamic metrics and priority actions).
+  - Risk drill-down by category and tenancy-aware control tables.
+  - Detailed CIS sections 1–5 with pass/fail status, current/expected values, and remediation guidance.
+- Console Remediation Plan – SQL*Plus output (redirect via `SPOOL` if desired) containing grouped, copy/paste-ready SQL to close identified gaps. Optional findings (warnings/manual) are clearly labeled.
 
-- **✅ Success**: All required privileges available - audit proceeds normally
-- **⚠️ Warnings**: Some optional features unavailable - audit continues with limited functionality  
-- **❌ Critical Failure**: Missing essential privileges - audit stops with detailed setup instructions
+## How Version Detection Works
 
-If privilege issues are detected, the script provides specific commands to fix them based on your database architecture (multitenant vs non-multitenant).
+The script defines SQL*Plus substitution variables (`&version_num`, `&is_multitenant`, `&is_cdb_root`, etc.) based on `V$INSTANCE` and `V$DATABASE`. Every version-specific control uses these variables to show only the relevant rows, preventing noisy failures from controls that do not apply. Multitenant runs should be executed both from CDB$ROOT and each PDB to obtain complete coverage.
 
-### Example Output
+## Validation Tips
 
-The script generates two types of output:
+- Run the script first as SYS or a DBA role to confirm privileges; once verified, switch to the least-privilege audit user.
+- Compare the HTML executive summary counts with your change management records (e.g., default passwords or PUBLIC privileges) to validate accuracy.
+- When running in CDB environments, verify `CONTAINER_DATA` is set appropriately so cross-container views return rows.
 
-1. **HTML Report**: `CIS_<hostname>_<instance_name>.html`
-   - Professional web-based report
-   - Color-coded results (Pass/Fail/Warning)
-   - Detailed remediation steps
-   - Executive summary
+## Troubleshooting
 
-2. **Console Summary**:
-   ```
-   ============================================================
-            CIS Oracle Database Audit Report Generated
-   ============================================================
-   Output file: CIS_hostname_ORCL.html
-   
-   Report includes comprehensive checks for:
-   - Database installation and patching
-   - Oracle parameter settings  
-   - Connection and login restrictions
-   - User access and authorization restrictions
-   - Audit and logging policies
-   ============================================================
-   ```
+| Symptom | Likely Cause | Resolution |
+| --- | --- | --- |
+| `ORA-01031: insufficient privileges` during preflight | Missing grants on `DBA_*` or `CDB_*` views | Re-run the privilege grant script; ensure `AUDIT_VIEWER` is included for 12c+ |
+| HTML report missing data tables | SQL*Plus `SET TERMOUT OFF` not honored | Use the provided script without modification and run in a SQL*Plus terminal (not SQL Developer) |
+| Controls still show “FAIL” after remediation | Statement requires restart or rerun | Restart the database if SPFILE parameters changed, then re-execute the audit |
+| Legacy control rows appear for wrong version | Script not updated | Pull latest changes; version filters rely on substitution variables set near the top of the script |
 
-## 📊 Report Features
+## Contributing
 
-### Visual Indicators
-- 🟢 **PASS**: Compliant with CIS benchmark
-- 🔴 **FAIL**: Non-compliant, immediate attention required
-- 🟡 **WARNING**: Minor issues or recommendations
-- ⚪ **MANUAL**: Requires manual verification
+1. Fork the repository and create a feature branch.
+2. Update the SQL script and `README.md` or supporting docs as needed.
+3. Run the audit against target versions (CDB root & representative PDB where applicable) and attach relevant output or summaries in your PR.
+4. Open a PR describing the change, testing performed, and any new privileges required.
 
-### Report Sections
-- **Executive Summary**: High-level compliance overview
-- **Database Information**: Environment details
-- **Detailed Findings**: Control-by-control analysis
-- **Remediation Guide**: Step-by-step fix instructions
-- **Risk Assessment**: Priority recommendations
+For agent-specific guidance see `AGENTS.md`, `CLAUDE.md`, or `WARP.md` in the root directory.
 
-## 🔧 Configuration
-
-The script is self-configuring but you can customize:
-
-### SQL*Plus Settings
-Modify the initial settings block for custom formatting:
-```sql
-SET PAGESIZE 0
-SET LINESIZE 4000
-SET HEADING OFF
-SET FEEDBACK OFF
-```
-
-### Report Styling
-Customize the HTML CSS section for corporate branding or different color schemes.
-
-## 📁 Project Structure
-
-```
-oracle/
-├── README.md                                    # This file
-├── cis_benchmark_11g_through_19c.sql          # Main audit script
-└── docs/                                        # CIS Benchmark PDFs
-    ├── CIS_Oracle_Database_11g_R2_Benchmark_v2.2.0_ARCHIVE.pdf
-    ├── CIS_Oracle_Database_12c_Benchmark_v3.0.0_ARCHIVE.pdf
-    ├── CIS_Oracle_Database_18c_Benchmark_v1.1.0_ARCHIVE.pdf
-    ├── CIS_Oracle_Database_19c_Benchmark_v1.2.0.pdf
-    └── CIS_Oracle_Database_23ai_Benchmark_v1.1.0.pdf
-```
-
-## 🔒 Security Considerations
-
-### Database Privileges
-- **Use the dedicated CISSCAN user** created with the setup instructions
-- **Never use SYS or SYSTEM** accounts for routine auditing
-- **Rotate audit user passwords regularly** (recommend 90 days)
-- **Lock the audit user** when not actively performing audits:
-  ```sql
-  ALTER USER CISSCAN ACCOUNT LOCK;   -- Lock when not in use
-  ALTER USER CISSCAN ACCOUNT UNLOCK; -- Unlock for auditing
-  ```
-- **Monitor audit user activity** through database audit logs
-- **Remove unnecessary privileges** if using alternative setup methods
-
-### Network Security
-- Run audits from secure, authorized systems
-- Use encrypted connections (SSL/TLS) when possible
-- Limit network access to audit systems
-
-### Report Handling
-- Generated HTML reports may contain sensitive information
-- Store reports in secure locations
-- Implement appropriate access controls
-- Consider report encryption for highly sensitive environments
-
-## 🚨 Troubleshooting
-
-### Common Issues
-
-**"Insufficient Privileges" Error:**
-```sql
--- Ensure you followed the Database Setup section properly
--- For missing specific views, grant explicitly:
-GRANT SELECT ON DBA_USERS_WITH_DEFPWD TO cisscanrole;
-GRANT SELECT ON V_$PARAMETER TO cisscanrole;
-GRANT AUDIT_VIEWER TO cisscanrole; -- For 12c+ audit features
-```
-
-**"Table or View Does Not Exist" (DBA_USERS_WITH_DEFPWD):**
-```sql
--- This view requires specific privileges beyond SELECT ANY DICTIONARY
--- Connect as SYS or SYSTEM and grant:
-GRANT SELECT ON SYS.DBA_USERS_WITH_DEFPWD TO cisscanrole;
--- Or use the complete setup from Database Setup section
-```
-
-**"Table or View Does Not Exist" (AUDIT_UNIFIED_ENABLED_POLICIES):**
-```sql
--- For 12c+ unified auditing features
-GRANT AUDIT_VIEWER TO cisscanrole;
--- Or connect as privileged user for full audit access
-```
-
-**Script Hangs or Errors:**
-- Check SQL*Plus version compatibility
-- Verify database connectivity
-- Review any custom modifications
-
-### Debug Mode
-Enable debug output by setting:
-```sql
-SET ECHO ON
-SET TERMOUT ON
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please consider:
-
-1. **New Oracle Versions**: Add support for newer Oracle releases
-2. **Additional Checks**: Implement additional CIS controls
-3. **Report Enhancements**: Improve HTML formatting or add features
-4. **Bug Fixes**: Address any identified issues
-
-### Development Setup
-1. Fork the repository
-2. Create a test Oracle environment
-3. Test changes across multiple Oracle versions
-4. Submit pull requests with detailed descriptions
-
-## 📚 References
-
-- [CIS Oracle Database Benchmarks](https://www.cisecurity.org/benchmark/oracle_database)
-- [Oracle Database Security Guide](https://docs.oracle.com/en/database/oracle/oracle-database/)
-- [Oracle Database Reference](https://docs.oracle.com/en/database/oracle/oracle-database/19/refrn/)
-
-## 📄 License
-
-This project is provided as-is for educational and professional use. Please ensure compliance with:
-- CIS Benchmark licensing terms
-- Oracle Database licensing requirements
-- Your organization's security and compliance policies
-
-## ⚠️ Disclaimer
-
-- This tool is based on CIS Oracle Database Benchmarks but may not cover all controls
-- Some checks require manual verification of configuration files or additional privileges
-- Always test in development environments before production use
-- Results should be reviewed by qualified database security professionals
-- Consider commercial database security tools for comprehensive enterprise assessments
-
-## 🏷️ Version History
-
-- **v1.0**: Initial release with support for Oracle 11g R2 through 19c
-- **Latest**: Enhanced multi-version support and improved HTML reporting
-
----
-
-**Author**: Alexis Boscher  
-**Created**: 2025  
-**Last Updated**: 2025
