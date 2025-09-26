@@ -9,6 +9,7 @@ This repository delivers a self-contained SQL*Plus audit that maps Oracle databa
 - **Detailed CIS Mapping** – 100+ controls aligned to CIS benchmark categories (installation, parameters, authentication, privileges, auditing) with explanatory remediation text.
 - **Actionable Remediation Output** – After the HTML report is spooled (`CIS_<host>_<instance>.html`), the script writes a raw remediation plan to the SQL*Plus session (capturable via `SPOOL` if desired). Entries are grouped by theme with ready-to-run SQL.
 - **Pre-flight Privilege Checks** – A PL/SQL verification block stops the audit early if mandatory dictionary views or unified auditing views are not accessible, preventing misleading results.
+- **One-click PASS Toggle** – The HTML report includes a toolbar button (or change the default via the `DEFINE SHOW_PASS` toggle near the top of the script) to hide passing controls for faster triage.
 
 ## Supported Versions & Benchmarks
 

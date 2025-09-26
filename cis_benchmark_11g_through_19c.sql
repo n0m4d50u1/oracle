@@ -18,6 +18,7 @@ SET TRIMSPOOL ON
 SET TERMOUT ON
 SET ECHO OFF
 SET SERVEROUTPUT ON
+DEFINE SHOW_PASS = YES
 
 -- ============================================================================
 -- PRIVILEGE VERIFICATION SECTION
@@ -307,6 +308,8 @@ SELECT SYS_CONTEXT('USERENV', 'SERVER_HOST') AS hostname FROM DUAL;
 SELECT SYS_CONTEXT('USERENV', 'INSTANCE_NAME') AS instance_name FROM DUAL;
 SET TERMOUT ON
 SET DEFINE ON
+COLUMN show_pass_flag NEW_VALUE show_pass_flag NOPRINT
+SELECT CASE WHEN UPPER(NVL('&SHOW_PASS','YES')) = 'NO' THEN 'hide-pass' ELSE '' END AS show_pass_flag FROM dual;
 -- Set output file with dynamic name CIS_HOST_SID.html
 SPOOL CIS_&hostname._&instance_name..html
 SET DEFINE OFF
@@ -350,12 +353,38 @@ PROMPT .toc ul { list-style-type: none; padding-left: 0; }
 PROMPT .toc li { margin: 5px 0; }
 PROMPT .toc a { text-decoration: none; color: #007bff; }
 PROMPT .toc a:hover { text-decoration: underline; }
+PROMPT body.hide-pass tr.pass { display: none; }
+PROMPT .report-header { position: sticky; top: 0; background: #ffffff; margin: -20px -20px 20px; padding: 15px 20px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); z-index: 100; border-bottom: 1px solid #e0e0e0; }
+PROMPT .header-main { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+PROMPT .header-main h1 { margin: 0; border-bottom: none; padding-bottom: 0; }
+PROMPT .toggle-pass-btn { background-color: #546e7a; color: #fff; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; transition: background-color 0.2s ease, transform 0.2s ease; display: inline-flex; align-items: center; gap: 6px; }
+PROMPT .toggle-pass-btn:hover { background-color: #455a64; transform: translateY(-1px); }
+PROMPT .toggle-pass-btn:focus { outline: none; box-shadow: 0 0 0 2px rgba(84,110,122,0.3); }
+PROMPT .report-footer { position: sticky; bottom: 0; background: #ffffff; margin: 30px -20px -20px; padding: 12px 20px; box-shadow: 0 -2px 6px rgba(0,0,0,0.1); border-top: 1px solid #e0e0e0; font-size: 12px; color: #607d8b; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+PROMPT .report-footer p { margin: 4px 0; }
 PROMPT </style>
+PROMPT <script>
+PROMPT function togglePassRows() {
+PROMPT   const body = document.body;
+PROMPT   const hide = !body.classList.contains('hide-pass');
+PROMPT   body.classList.toggle('hide-pass', hide);
+PROMPT   const label = document.getElementById('toggle-pass-label');
+PROMPT   if (label) {
+PROMPT     label.textContent = hide ? 'Show PASS rows' : 'Hide PASS rows';
+PROMPT   }
+PROMPT }
+PROMPT document.addEventListener('DOMContentLoaded', function () {
+PROMPT   const label = document.getElementById('toggle-pass-label');
+PROMPT   if (!label) { return; }
+PROMPT   const hide = document.body.classList.contains('hide-pass');
+PROMPT   label.textContent = hide ? 'Show PASS rows' : 'Hide PASS rows';
+PROMPT });
+PROMPT </script>
 PROMPT </head>
-PROMPT <body>
+PROMPT <body class="&show_pass_flag">
 PROMPT <div class="container">
-
--- Report Header
+PROMPT <header class="report-header">
+PROMPT <div class="header-main">
 SELECT '<h1><span class="material-icons">security</span>CIS ' || 
   CASE 
     WHEN version LIKE '19.%' THEN 'Oracle Database 19c'
@@ -365,6 +394,11 @@ SELECT '<h1><span class="material-icons">security</span>CIS ' ||
     WHEN version LIKE '11.2%' THEN 'Oracle Database 11g Release 2'
     ELSE 'Oracle Database'
   END || ' Benchmark Audit Report</h1>' FROM v$instance;
+PROMPT <button type="button" class="toggle-pass-btn" onclick="togglePassRows()"><span class="material-icons">visibility</span><span id="toggle-pass-label">Hide PASS rows</span></button>
+PROMPT </div>
+PROMPT </header>
+
+-- Report Header
 PROMPT <div class="toc"><h3>Database Information</h3>
 SELECT '<p><strong>Host:</strong> ' || SYS_CONTEXT('USERENV', 'SERVER_HOST') || '</p>' FROM DUAL;
 SELECT '<p><strong>Database:</strong> ' || SYS_CONTEXT('USERENV', 'DB_NAME') || '</p>' FROM DUAL;
@@ -482,7 +516,28 @@ FROM v$instance;
 
 WITH
   default_pw AS (
-    SELECT COUNT(*) cnt FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%'
+    SELECT COUNT(*) cnt
+    FROM (
+      SELECT dp.USERNAME
+      FROM V$INSTANCE vi
+      CROSS JOIN DBA_USERS_WITH_DEFPWD dp
+      WHERE vi.version LIKE '11.%'
+        AND dp.USERNAME NOT LIKE '%XS$NULL%'
+      UNION ALL
+      SELECT a.USERNAME
+      FROM V$INSTANCE vi
+      CROSS JOIN DBA_USERS_WITH_DEFPWD a
+      JOIN DBA_USERS b ON a.USERNAME = b.USERNAME
+      WHERE vi.version NOT LIKE '11.%'
+        AND (
+          (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO'
+          OR (
+            (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+            AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'
+          )
+        )
+        AND b.ACCOUNT_STATUS = 'OPEN'
+    )
   ),
   sample_accounts AS (
     SELECT COUNT(*) cnt FROM DBA_USERS
@@ -715,7 +770,28 @@ PROMPT <th style="padding: 12px; text-align: left;">Status</th></tr>
 
 WITH
   default_pw AS (
-    SELECT COUNT(*) cnt FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%'
+    SELECT COUNT(*) cnt
+    FROM (
+      SELECT dp.USERNAME
+      FROM V$INSTANCE vi
+      CROSS JOIN DBA_USERS_WITH_DEFPWD dp
+      WHERE vi.version LIKE '11.%'
+        AND dp.USERNAME NOT LIKE '%XS$NULL%'
+      UNION ALL
+      SELECT a.USERNAME
+      FROM V$INSTANCE vi
+      CROSS JOIN DBA_USERS_WITH_DEFPWD a
+      JOIN DBA_USERS b ON a.USERNAME = b.USERNAME
+      WHERE vi.version NOT LIKE '11.%'
+        AND (
+          (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO'
+          OR (
+            (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+            AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'
+          )
+        )
+        AND b.ACCOUNT_STATUS = 'OPEN'
+    )
   ),
   sample_accounts AS (
     SELECT COUNT(*) cnt FROM DBA_USERS
@@ -956,7 +1032,28 @@ PROMPT </table>
 PROMPT <h3 style="color: #1565c0; margin: 25px 0 10px 0;">Priority Actions</h3>
 WITH
   default_pw AS (
-    SELECT COUNT(*) cnt FROM DBA_USERS_WITH_DEFPWD WHERE USERNAME NOT LIKE '%XS$NULL%'
+    SELECT COUNT(*) cnt
+    FROM (
+      SELECT dp.USERNAME
+      FROM V$INSTANCE vi
+      CROSS JOIN DBA_USERS_WITH_DEFPWD dp
+      WHERE vi.version LIKE '11.%'
+        AND dp.USERNAME NOT LIKE '%XS$NULL%'
+      UNION ALL
+      SELECT a.USERNAME
+      FROM V$INSTANCE vi
+      CROSS JOIN DBA_USERS_WITH_DEFPWD a
+      JOIN DBA_USERS b ON a.USERNAME = b.USERNAME
+      WHERE vi.version NOT LIKE '11.%'
+        AND (
+          (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'NO'
+          OR (
+            (SELECT CDB FROM V$DATABASE WHERE ROWNUM = 1) = 'YES'
+            AND SYS_CONTEXT('USERENV', 'CON_NAME') != 'CDB$ROOT'
+          )
+        )
+        AND b.ACCOUNT_STATUS = 'OPEN'
+    )
   ),
   sample_accounts AS (
     SELECT COUNT(*) cnt FROM DBA_USERS
@@ -4222,6 +4319,40 @@ SELECT '<tr class="' ||
   '</tr>'
 FROM DBA_TAB_PRIVS
 WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='UTL_HTTP';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>UTL_URL</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON UTL_URL FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='UTL_URL';
+
+SELECT '<tr class="' ||
+  CASE 
+    WHEN COUNT(*) = 0 THEN 'pass'
+    ELSE 'fail'
+  END || '">' ||
+  '<td>DBMS_NETWORK_ACL_ADMIN</td>' ||
+  '<td>' || CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END || '</td>' ||
+  '<td>' || 
+    CASE WHEN COUNT(*) > 0 THEN 'PUBLIC has EXECUTE privilege'
+    ELSE 'No PUBLIC privilege found'
+    END || '</td>' ||
+  '<td>No EXECUTE privilege for PUBLIC</td>' ||
+  '<td class="remediation">REVOKE EXECUTE ON DBMS_NETWORK_ACL_ADMIN FROM PUBLIC;</td>' ||
+  '</tr>'
+FROM DBA_TAB_PRIVS
+WHERE GRANTEE='PUBLIC' AND PRIVILEGE='EXECUTE' AND TABLE_NAME='DBMS_NETWORK_ACL_ADMIN';
 
 SELECT '<tr class="' ||
   CASE 
@@ -11468,7 +11599,7 @@ FROM v$instance vi, fga_count fc;
 
 SELECT CASE WHEN version LIKE '12.%' OR version LIKE '18.%' OR version LIKE '19.%' THEN '</table>' ELSE '' END FROM v$instance;
 
-PROMPT <div style="margin-top: 40px; padding-top: 20px; border-top: 2px solid #dee2e6; font-size: 12px; color: #607d8b;">
+PROMPT <footer class="report-footer">
 SELECT '<p><strong>Report Generated:</strong> ' || TO_CHAR(SYSDATE, 'DD-MON-YYYY HH24:MI:SS') ||
        ' | <strong>Database:</strong> ' || SYS_CONTEXT('USERENV', 'DB_NAME') ||
        ' | <strong>Instance:</strong> ' || SYS_CONTEXT('USERENV', 'INSTANCE_NAME') || '</p>' FROM DUAL;
@@ -11479,10 +11610,9 @@ SELECT '<p><strong>Benchmark Reference:</strong> ' ||
     WHEN version LIKE '12.%' THEN 'CIS Oracle Database 12c Benchmark v3.0.0'
     WHEN version LIKE '11.2%' THEN 'CIS Oracle Database 11g R2 Benchmark v2.2.0'
     ELSE 'CIS Oracle Database Benchmark'
-  END || '.</p>'
-  || '<p>Validate findings against business requirements and test all fixes prior to production deployment.</p>'
-FROM v$instance;
-PROMPT </div>
+  END || '</p>' FROM v$instance;
+PROMPT <p>Validate findings against business requirements and test all fixes prior to production deployment.</p>
+PROMPT </footer>
 PROMPT </div>
 PROMPT </body>
 PROMPT </html>
